@@ -16,7 +16,10 @@ image_tag  := "latest"
 image      := image_repo + ":" + image_tag
 container  := "dp-test"
 repo_root  := `git rev-parse --show-toplevel` + "/src/fastmcp_mcps"
-tf_dir     := justfile_directory() + "/terraform"
+# Windows の justfile_directory() はバックスラッシュ区切りで返るため、bash が解釈する際にエスケープとして消える。
+# forward slash に変換してから他のパスを組み立てる。
+infra_dir  := replace(justfile_directory(), "\\", "/")
+tf_dir     := infra_dir + "/terraform"
 
 # レシピ一覧を表示
 default:
@@ -26,7 +29,7 @@ default:
 
 # Docker イメージをビルド
 build:
-    docker build -f {{ justfile_directory() }}/Dockerfile -t dynamic-prompt {{ repo_root }}
+    docker build -f {{ infra_dir }}/Dockerfile -t dynamic-prompt {{ repo_root }}
 
 # コンテナ起動 (http モード, localhost:8080)
 run: build
@@ -41,6 +44,10 @@ stop:
 health:
     curl -sf http://localhost:8080/health
 
+# ローカル (Docker) のクイズ画面をブラウザで開く
+quiz:
+    cmd //c start "" "http://localhost:8080/"
+
 # コンテナログ表示
 logs:
     docker logs -f {{ container }}
@@ -50,7 +57,7 @@ logs:
 # Cloud Build でイメージビルド & プッシュ
 cloud-build:
     gcloud builds submit \
-        --config {{ justfile_directory() }}/cloudbuild.yaml \
+        --config {{ infra_dir }}/cloudbuild.yaml \
         --substitutions=_IMAGE={{ image }} \
         {{ repo_root }}
 
@@ -82,6 +89,10 @@ tf-destroy:
 cloud-health:
     URL=$(terraform -chdir={{ tf_dir }} output -raw service_url) && curl -sf "$URL/health"
 
+# Cloud Run のクイズ画面をブラウザで開く
+cloud-quiz:
+    URL=$(terraform -chdir={{ tf_dir }} output -raw service_url) && cmd //c start "" "$URL/"
+
 # Cloud Run サービスの詳細情報 (gcloud から取得: リビジョン, イメージ, ステータス等)
 cloud-info:
     gcloud run services describe dynamic-prompt \
@@ -102,14 +113,14 @@ cloud-info:
 # 変更を即時反映するには `reload_config` MCP ツールを呼ぶ。
 upload-prompts:
     gsutil -m rsync -r -d \
-        {{ justfile_directory() }}/../src/dynamic_prompt/prompts \
+        {{ infra_dir }}/../src/dynamic_prompt/prompts \
         gs://{{ project_id }}-dp-data/prompts
 
 # GCS 上の prompts/ をローカルに取得（バックアップ・確認用）
 download-prompts:
     gsutil -m rsync -r \
         gs://{{ project_id }}-dp-data/prompts \
-        {{ justfile_directory() }}/../src/dynamic_prompt/prompts
+        {{ infra_dir }}/../src/dynamic_prompt/prompts
 
 # ---------- 一括操作 ----------
 
