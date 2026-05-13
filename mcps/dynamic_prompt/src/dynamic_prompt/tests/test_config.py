@@ -8,8 +8,12 @@ from dynamic_prompt.models import AppConfig, UserConfig
 
 @pytest.fixture()
 def store() -> ConfigStore:
-    """テストごとに独立した ConfigStore を生成する。"""
-    return ConfigStore()
+    """テストごとに独立した ConfigStore を生成する。
+
+    TTL=0 で自動 refresh を無効化し、update_* で書いた値が次のアクセスで
+    上書きされないようにする。
+    """
+    return ConfigStore(ttl_seconds=0)
 
 
 # ---------------------------------------------------------------------------

@@ -554,6 +554,29 @@ def score_free_answers(session_id: int, scores: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Config reload
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def reload_config() -> str:
+    """
+    Reload all YAML configuration (user_config, app_config, languages, instructions)
+    from the configured source (local filesystem or GCS bucket). Use this after editing
+    the external YAML files to apply changes immediately without restarting the server.
+    TTL-based auto-refresh also exists, but this tool forces an instant reload.
+    """
+    from datetime import datetime
+
+    config_store.reload()
+    return (
+        f"Reloaded at {datetime.utcnow().isoformat()}Z from {config_store.source}. "
+        f"languages={len(config_store.languages)}, "
+        f"instructions={len(config_store.instructions)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Story Topic Tools
 # ---------------------------------------------------------------------------
 

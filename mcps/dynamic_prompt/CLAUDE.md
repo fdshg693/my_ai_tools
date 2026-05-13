@@ -61,7 +61,7 @@ The validator (`validate.py`) and unit tests are the primary correctness checks.
 
 ## Architecture
 
-The server exposes 12 MCP tools: `determine_language`, `get_instruction`, `get_words`, `save_words`, `answer_words`, `send_quiz`, `send_free_quiz`, `get_quiz_results`, `get_unscored_quizzes`, `score_free_answers`, `get_past_topics`, `save_story_topic`.
+The server exposes 13 MCP tools: `determine_language`, `get_instruction`, `get_words`, `save_words`, `answer_words`, `send_quiz`, `send_free_quiz`, `get_quiz_results`, `get_unscored_quizzes`, `score_free_answers`, `get_past_topics`, `save_story_topic`, `reload_config`.
 
 ### Module structure
 
@@ -70,7 +70,8 @@ The server exposes 12 MCP tools: `determine_language`, `get_instruction`, `get_w
 | Module | Responsibility |
 |--------|---------------|
 | `models.py` | Dataclasses (`Language`, `UserConfig`, `AppConfig`, `Instruction`) — すべて `frozen=True` |
-| `config.py` | YAML loading, path constants, `ConfigStore` mutable wrapper (`config_store` シングルトン) |
+| `config_source.py` | `ConfigSource` 抽象 (`LocalConfigSource` / `GCSConfigSource`) と factory。`PROMPTS_URI` で切替 |
+| `config.py` | YAML loading, path constants, TTL キャッシュ付き `ConfigStore` (`config_store` シングルトン)。アクセス時に TTL を確認して自動 refresh |
 | `session.py` | `_Session` class and singleton — holds the current target language |
 | `database.py` | SQLite connection factory (`_connect_db`), `init_db()` (起動時スキーマ初期化), バージョン管理付きマイグレーション (`_MIGRATIONS`), status constants, quiz DB helpers (MC + free-answer), `save_words_db()` (Web UI からの単語保存)。`DB_PATH` は環境変数で上書き可能 |
 | `tools.py` | Variable resolvers, template rendering, vocab helpers, quiz tools (MC + free-answer), story topic tools, and 13 `@mcp.tool` functions |
@@ -146,7 +147,7 @@ Claude (AI) がクイズを生成
 
 ### Configuration-driven design
 
-Behavior is driven by YAML files under `src/dynamic_prompt/prompts/`:
+Behavior is driven by YAML files (置き場所はローカル `src/dynamic_prompt/prompts/` または GCS バケット — 後述):
 
 - `user_config.yaml` — ユーザー設定 (`native_language`, `memory_test_period_hours`)
 - `app_config.yaml` — アプリ設定 (`vocab_get_limit`, `quiz_server_port`, `quiz_server_port_pool_size`)
@@ -154,12 +155,26 @@ Behavior is driven by YAML files under `src/dynamic_prompt/prompts/`:
 - `languages/*.yaml` — per-language profiles (label, aliases, user_level, teaching_guide)
 - `languages/_default.yaml` — fallback for unrecognized languages
 
-**ConfigStore (mutable wrapper)**: `config.py` の `ConfigStore` クラスが frozen dataclass インスタンスへの mutable wrapper として機能する。dataclass 自体は `frozen=True` のまま（値オブジェクトの安全性を維持）、`ConfigStore` の属性を差し替えることで設定の動的変更に対応する。
+**外部ストレージ対応 (`PROMPTS_URI`)**: `config_source.py` の `ConfigSource` 抽象でローカルファイルシステムと GCS バケットの両方に対応する。
 
-- `config_store.reload()` — YAML から全設定を再読み込み
-- `config_store.update_user_config(**kwargs)` — 指定フィールドだけ変更した新しい UserConfig に差し替え
+| `PROMPTS_URI` | 動作 |
+|---------------|------|
+| 未設定（既定） | `src/dynamic_prompt/prompts/` を `LocalConfigSource` で読み込む（後方互換） |
+| `/abs/path` | 指定パスを `LocalConfigSource` で読み込む |
+| `gs://bucket/prefix` | GCS バケットの prefix 配下を `GCSConfigSource` (google-cloud-storage SDK) で読み込む |
+
+Cloud Run では `PROMPTS_URI=gs://${project_id}-dp-data/prompts` を設定し、YAML 群を GCS に置く。アップロードは `just upload-prompts` (`gsutil rsync`) で行う。`validate.py` はローカル YAML 専用で、GCS にアップロードする前のチェックに使う。
+
+**TTL キャッシュ**: `ConfigStore` はアクセスごとに TTL を確認し、期限切れなら裏で再読み込みする。`CONFIG_TTL_SECONDS` 環境変数で制御（既定 60 秒、0 以下で自動 refresh 無効）。再読み込みが例外で失敗した場合は古いキャッシュを返し、サーバを停止させない。GCS 経由でも毎リクエストでネットワークを叩かない設計。
+
+**ConfigStore (mutable wrapper + TTL cache)**: `config.py` の `ConfigStore` クラスが frozen dataclass インスタンスへの mutable wrapper として機能する。dataclass 自体は `frozen=True` のまま（値オブジェクトの安全性を維持）、`ConfigStore` の属性 (`user_config`, `app_config`, `languages`, `instructions`) は `@property` で公開され、アクセス時に TTL を確認する。
+
+- `config_store.reload()` — TTL を無視して即時再読み込み
+- `config_store.update_user_config(**kwargs)` — 指定フィールドだけ変更した新しい UserConfig に差し替え。次の自動 refresh または `reload()` で破棄される一時的な上書き
 - `config_store.update_app_config(**kwargs)` — 同上 (AppConfig)
 - `config_store.format_language_codes()` — 登録言語コードのカンマ区切り文字列
+
+MCP ツール `reload_config` (`tools.py`) を呼ぶと、Claude 側から `reload()` を発火できる（外部 YAML を編集 → 即時反映の用途）。
 
 すべてのモジュール (`tools.py`, `main.py`) は `config_store` シングルトン経由で設定にアクセスする。旧モジュールレベル定数 (`USER_CONFIG`, `APP_CONFIG`, `LANGUAGES`, `INSTRUCTIONS`) は廃止済み。
 

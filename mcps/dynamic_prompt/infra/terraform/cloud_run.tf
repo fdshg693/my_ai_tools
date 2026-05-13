@@ -64,6 +64,14 @@ resource "google_cloud_run_v2_service" "app" {
         name  = "FASTMCP_HOME"
         value = "/data/.fastmcp"
       }
+      env {
+        name  = "PROMPTS_URI"
+        value = "gs://${google_storage_bucket.data.name}/prompts"
+      }
+      env {
+        name  = "CONFIG_TTL_SECONDS"
+        value = "60"
+      }
 
       volume_mounts {
         name       = "dp-data"

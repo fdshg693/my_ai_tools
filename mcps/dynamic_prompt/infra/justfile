@@ -95,6 +95,22 @@ cloud-info:
             metadata.annotations.'run.googleapis.com/launch-stage':label=STAGE \
         )"
 
+# ---------- Prompts (YAML 設定の GCS 同期) ----------
+
+# YAML 設定 (prompts ディレクトリ) を GCS バケットの prompts/ prefix に同期
+# サーバはこれを `PROMPTS_URI=gs://<bucket>/prompts` から読み込み TTL キャッシュする。
+# 変更を即時反映するには `reload_config` MCP ツールを呼ぶ。
+upload-prompts:
+    gsutil -m rsync -r -d \
+        {{ justfile_directory() }}/../src/dynamic_prompt/prompts \
+        gs://{{ project_id }}-dp-data/prompts
+
+# GCS 上の prompts/ をローカルに取得（バックアップ・確認用）
+download-prompts:
+    gsutil -m rsync -r \
+        gs://{{ project_id }}-dp-data/prompts \
+        {{ justfile_directory() }}/../src/dynamic_prompt/prompts
+
 # ---------- 一括操作 ----------
 
 # cloud-build → tf-apply
