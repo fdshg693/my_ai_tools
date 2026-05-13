@@ -1,0 +1,8 @@
+code: fr
+label: French
+aliases: ["fra", "français", "francais", "フランス語"]
+user_level: |
+  The user is an intermediate learner of French.
+teaching_guide: |
+  Answer in English. Use various intermediate~advanced example French sentences
+  along with their English translations and grammatical knowledge.

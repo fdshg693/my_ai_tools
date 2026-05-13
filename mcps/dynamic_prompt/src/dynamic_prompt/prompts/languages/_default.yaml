@@ -1,0 +1,7 @@
+code: _default
+label: Unknown
+user_level: |
+  The user's language level is unknown. but probably a beginner.
+  But if the language is similar to French, English, user could guess some basic words and grammar.
+teaching_guide: |
+  Answer in English. Provide basic explanations and simple example sentences.

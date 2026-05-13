@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz</title>
+  <link rel="stylesheet" href="/static/quiz.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1 id="page-title">Quiz</h1>
+      <div id="status" class="status-badge waiting">
+        <span class="dot"></span>
+        <span id="status-text">Connecting...</span>
+      </div>
+    </header>
+
+    <div id="waiting">
+      <p>Waiting for a new quiz...</p>
+    </div>
+
+    <div id="quiz-area">
+      <div class="quiz-title" id="quiz-title"></div>
+      <form id="quiz-form">
+        <div id="questions-container"></div>
+        <div class="submit-area">
+          <button type="submit" class="btn btn-primary" id="submit-btn">Submit</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="results-summary">
+      <div class="score" id="score-value"></div>
+      <div class="score-label" id="score-label"></div>
+      <div class="score-bar"><div class="score-bar-fill" id="score-bar-fill"></div></div>
+      <div class="next-msg">Waiting for the next quiz...</div>
+    </div>
+
+    <div id="word-input-section">
+      <button class="section-toggle" id="word-toggle" type="button">
+        Add Words
+        <span class="arrow">&#9654;</span>
+      </button>
+      <div class="section-body" id="word-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="word-input">Words (comma-separated)</label>
+            <input type="text" id="word-input" placeholder="apple, banana, cherry">
+          </div>
+          <div class="form-group form-group-sm">
+            <label for="word-lang">Lang</label>
+            <input type="text" id="word-lang" placeholder="en">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="word-context">Context (optional)</label>
+          <input type="text" id="word-context" placeholder="The sentence where the words appeared">
+        </div>
+        <button type="button" class="word-save-btn" id="word-save-btn">Save</button>
+        <div class="word-feedback" id="word-feedback"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/quiz.js"></script>
+</body>
+</html>

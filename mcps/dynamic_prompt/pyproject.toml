@@ -1,0 +1,26 @@
+[project]
+name = "dynamic_prompt"
+version = "0.1.0"
+description = "言語学習サポート用MCPサーバー"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp[apps]>=3.1.0",
+    "prefab-ui>=0.13.1",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+dynamic_prompt = "dynamic_prompt.main:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dynamic_prompt"]
+
+[tool.uv]
+package = true

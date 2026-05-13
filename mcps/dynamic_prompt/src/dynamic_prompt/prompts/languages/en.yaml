@@ -1,0 +1,9 @@
+code: en
+label: English
+aliases: ["eng", "英語"]
+user_level: |
+  The user is a native-level English speaker.
+  Try to deliberately use advanced vocabulary and complex sentence structures.
+teaching_guide: |
+  Answer in English. Provide a scholarly explanation
+  using various example sentences and etymologies.

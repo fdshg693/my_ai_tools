@@ -1,0 +1,13 @@
+{
+    "servers": {
+        "dynamic_prompt": {
+            "type": "stdio",
+            "command": "uv",
+            "args": [
+                "run",
+                "mcps\\dynamic_prompt\\src\\dynamic_prompt\\main.py"
+            ]
+        }
+    },
+    "inputs": []
+}

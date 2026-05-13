@@ -1,0 +1,101 @@
+# ============================================================
+# dynamic_prompt infra — Docker / Cloud Build / Terraform
+# ============================================================
+# Usage:  cd mcps/dynamic_prompt/infra && just <recipe>
+# ============================================================
+
+# 文字化け等の対策で Git Bash を利用する
+set windows-shell := ["C:/Program Files/Git/usr/bin/bash.exe", "-cu"]
+set shell         := ["bash", "-cu"]
+
+# ---------- 変数 ----------
+project_id := "dynamic-prompt-mcp"
+region     := "asia-northeast1"
+image_repo := region + "-docker.pkg.dev/" + project_id + "/dynamic-prompt/server"
+image_tag  := "latest"
+image      := image_repo + ":" + image_tag
+container  := "dp-test"
+repo_root  := `git rev-parse --show-toplevel` + "/src/fastmcp_mcps"
+tf_dir     := justfile_directory() + "/terraform"
+
+# レシピ一覧を表示
+default:
+    @just --list
+
+# ---------- Docker (ローカル) ----------
+
+# Docker イメージをビルド
+build:
+    docker build -f {{ justfile_directory() }}/Dockerfile -t dynamic-prompt {{ repo_root }}
+
+# コンテナ起動 (http モード, localhost:8080)
+run: build
+    docker run -d -p 8080:8080 -v dp-data:/data --name {{ container }} dynamic-prompt
+
+# コンテナ停止・削除
+stop:
+    -docker stop {{ container }} 2>/dev/null
+    -docker rm {{ container }} 2>/dev/null
+
+# ローカルヘルスチェック
+health:
+    curl -sf http://localhost:8080/health
+
+# コンテナログ表示
+logs:
+    docker logs -f {{ container }}
+
+# ---------- Cloud Build ----------
+
+# Cloud Build でイメージビルド & プッシュ
+cloud-build:
+    gcloud builds submit \
+        --config {{ justfile_directory() }}/cloudbuild.yaml \
+        --substitutions=_IMAGE={{ image }} \
+        {{ repo_root }}
+
+# ---------- Terraform ----------
+
+# terraform init
+tf-init:
+    terraform -chdir={{ tf_dir }} init
+
+# terraform plan (差分プレビュー)
+tf-plan:
+    terraform -chdir={{ tf_dir }} plan
+
+# terraform apply (インフラデプロイ)
+tf-apply:
+    terraform -chdir={{ tf_dir }} apply
+
+# terraform output
+tf-output:
+    terraform -chdir={{ tf_dir }} output
+
+# terraform destroy (要確認)
+tf-destroy:
+    terraform -chdir={{ tf_dir }} destroy
+
+# ---------- GCP 動作確認 ----------
+
+# Cloud Run ヘルスチェック (認証不要)
+cloud-health:
+    URL=$(terraform -chdir={{ tf_dir }} output -raw service_url) && curl -sf "$URL/health"
+
+# Cloud Run サービスの詳細情報 (gcloud から取得: リビジョン, イメージ, ステータス等)
+cloud-info:
+    gcloud run services describe dynamic-prompt \
+        --project={{ project_id }} \
+        --region={{ region }} \
+        --format="table[box]( \
+            status.url:label=URL, \
+            status.conditions[0].status:label=READY, \
+            spec.template.spec.containers[0].image:label=IMAGE, \
+            spec.template.metadata.name:label=REVISION, \
+            metadata.annotations.'run.googleapis.com/launch-stage':label=STAGE \
+        )"
+
+# ---------- 一括操作 ----------
+
+# cloud-build → tf-apply
+deploy: cloud-build tf-apply

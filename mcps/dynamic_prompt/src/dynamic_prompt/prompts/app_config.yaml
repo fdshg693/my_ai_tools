@@ -1,0 +1,3 @@
+vocab_get_limit: 5
+quiz_server_port: 8765
+quiz_server_port_pool_size: 3
