@@ -96,6 +96,8 @@ The server exposes 12 MCP tools: `determine_language`, `get_instruction`, `get_w
 
 **OAuth 認証 (HTTP モード)**: 環境変数 `GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` が設定されている場合、FastMCP の `GoogleProvider` で `/mcp` エンドポイントを OAuth 2.1 で保護する。`/health` やクイズ UI は認証不要。環境変数 `SERVICE_URL` で OAuth の `base_url` を指定する（デフォルト: `http://localhost:8080`）。環境変数が未設定の場合は認証なしで動作する（ローカル開発時）。
 
+**メールアドレス allowlist**: 環境変数 `ALLOWED_EMAILS` にカンマ区切りで Google アカウントのメールアドレスを指定すると、`EmailAllowlistGoogleTokenVerifier` (`main.py`) が `GoogleProvider` の token verifier を差し替え、許可リストに含まれないアカウントの認証を拒否する。`required_scopes` に `userinfo.email` を加えて email を必ず取得する。`ALLOWED_EMAILS` が未設定の場合は警告ログを出して全 Google アカウントを許可する（後方互換）。
+
 **クイズサーバーのポート管理**: `start_quiz_server()` はポートプール (デフォルト: 8765–8767) から利用可能なポートを順に試行する。ポートが占有されている場合は古いプロセスを `netstat`+`taskkill` (Windows) / `lsof`+`kill` (Unix) で自動停止してリトライする。プロセス終了時は `atexit` + `uvicorn.Server.should_exit` でグレースフルシャットダウンする。実際に使用されたポートは `get_active_port()` で取得できる。
 
 **注意**: `fastmcp run` にファイルパスを渡すと `mcp` インスタンスが二重生成されツールが0になる。Claude Desktop では `uv run dynamic_prompt`（エントリーポイント直接呼び出し）を使うこと。詳細は `CLAUDE_DESKTOPでの使い方.md` を参照。

@@ -30,3 +30,9 @@ variable "service_url" {
   description = "Cloud Run service URL (OAuth base_url に使用)"
   type        = string
 }
+
+variable "allowed_emails" {
+  description = "MCP 接続を許可する Google アカウントのメールアドレス（カンマ区切り）。空文字なら全 Google アカウント許可"
+  type        = string
+  default     = ""
+}

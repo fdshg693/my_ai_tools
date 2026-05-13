@@ -1,11 +1,40 @@
 """AIに言語学習のサポートをさせるためのMCPモジュール。"""
 
+import logging
 import os
 
 from fastmcp import FastMCP
+from fastmcp.server.auth.auth import AccessToken
+from fastmcp.server.auth.providers.google import GoogleTokenVerifier
 from starlette.responses import JSONResponse
 
 from dynamic_prompt.database import init_db
+
+logger = logging.getLogger(__name__)
+
+
+class EmailAllowlistGoogleTokenVerifier(GoogleTokenVerifier):
+    """Google トークン検証後に email を許可リストと照合する。
+
+    親クラスが userinfo を取得して `claims["email"]` を埋めた上で、
+    許可リストに含まれない場合は None を返す（= 認証失敗）。
+    `userinfo.email` スコープが付与されていない場合も email が取れず拒否される。
+    """
+
+    def __init__(self, *, allowed_emails: set[str], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._allowed_emails = allowed_emails
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        access_token = await super().verify_token(token)
+        if access_token is None:
+            return None
+        email = (access_token.claims or {}).get("email")
+        if not email or email.lower() not in self._allowed_emails:
+            logger.warning("Rejecting Google token: email %r not in allowlist", email)
+            return None
+        return access_token
+
 
 mcp = FastMCP("dynamic_prompt")
 
@@ -48,11 +77,36 @@ def main():
 
         if google_client_id and google_client_secret:
             from fastmcp.server.auth.providers.google import GoogleProvider
-            mcp.auth = GoogleProvider(
+
+            # email スコープを必須化して userinfo に email を含める
+            required_scopes = [
+                "openid",
+                "https://www.googleapis.com/auth/userinfo.email",
+            ]
+            provider = GoogleProvider(
                 client_id=google_client_id,
                 client_secret=google_client_secret,
                 base_url=service_url,
+                required_scopes=required_scopes,
             )
+
+            allowed_emails_env = os.environ.get("ALLOWED_EMAILS", "").strip()
+            if allowed_emails_env:
+                allowed = {
+                    e.strip().lower()
+                    for e in allowed_emails_env.split(",")
+                    if e.strip()
+                }
+                provider._token_validator = EmailAllowlistGoogleTokenVerifier(
+                    allowed_emails=allowed,
+                    required_scopes=required_scopes,
+                )
+            else:
+                logger.warning(
+                    "ALLOWED_EMAILS is not set: any Google account can authenticate."
+                )
+
+            mcp.auth = provider
 
         # MCP の Starlette アプリを取得
         # (/mcp ルート + /health custom_route + lifespan 管理を含む)

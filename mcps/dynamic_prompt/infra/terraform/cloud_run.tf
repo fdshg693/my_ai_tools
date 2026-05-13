@@ -57,6 +57,10 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.service_url
       }
       env {
+        name  = "ALLOWED_EMAILS"
+        value = var.allowed_emails
+      }
+      env {
         name  = "FASTMCP_HOME"
         value = "/data/.fastmcp"
       }

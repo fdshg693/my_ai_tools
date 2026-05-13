@@ -63,7 +63,7 @@ Windows では文字化け対策として `justfile` 内で Git Bash (`C:/Progra
 | File | Content |
 |------|---------|
 | `main.tf` | Provider, GCP API 有効化 |
-| `variables.tf` | `project_id`, `region`, `image_tag`, `google_client_id`, `google_client_secret`, `service_url` |
+| `variables.tf` | `project_id`, `region`, `image_tag`, `google_client_id`, `google_client_secret`, `service_url`, `allowed_emails` |
 | `terraform.tfvars` | 変数の実値 |
 | `registry.tf` | Artifact Registry (Docker) |
 | `storage.tf` | GCS バケット (`prevent_destroy`) — SQLite 永続化用 |
@@ -85,7 +85,8 @@ Windows では文字化け対策として `justfile` 内で Git Bash (`C:/Progra
 - **方式**: FastMCP `GoogleProvider` (OAuth 2.1) — アプリケーションレベルの認証
 - **保護対象**: `/mcp` エンドポイントのみ。`/health` やクイズ UI は認証不要
 - **Cloud Run IAM**: `allUsers` に `roles/run.invoker` を付与（未認証アクセス許可）
-- **環境変数**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SERVICE_URL` を Cloud Run コンテナに設定
+- **環境変数**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SERVICE_URL`, `ALLOWED_EMAILS` を Cloud Run コンテナに設定
+- **ユーザー絞り込み**: `ALLOWED_EMAILS` (terraform var: `allowed_emails`) にカンマ区切りで許可メールを指定。未指定なら全 Google アカウント許可
 - **OAuth 同意画面・クレデンシャル**: GCP Console → API & Services で事前に作成が必要
   - Authorized redirect URI: `{SERVICE_URL}/auth/callback`
 

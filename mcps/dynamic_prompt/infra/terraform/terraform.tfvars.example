@@ -1,0 +1,5 @@
+project_id           = "your-gcp-project-id"
+google_client_id     = "your-google-client-id"
+google_client_secret = "your-google-client-secret"
+service_url          = "https://your-service-url"
+allowed_emails       = "user1@example.com,user2@example.com"
