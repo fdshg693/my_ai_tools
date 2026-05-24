@@ -52,35 +52,67 @@ def test_search_partial_title_match():
     create_memo_db("買い物メモ", "週末の買い物")
     create_memo_db("旅行計画", "京都へ")
 
-    results = search_memos_db("メモ")
+    results = search_memos_db(["メモ"])
     titles = {m["title"] for m in results}
     assert titles == {"会議メモ 2026", "買い物メモ"}
 
 
+def test_search_annotates_matched_keyword():
+    create_memo_db("会議メモ", "")
+    results = search_memos_db(["メモ"])
+    assert results[0]["matched_keywords"] == ["メモ"]
+
+
+def test_search_multiple_keywords_or():
+    create_memo_db("会議メモ", "")
+    create_memo_db("買い物リスト", "")
+    create_memo_db("旅行計画", "")
+
+    results = search_memos_db(["メモ", "リスト"])
+    titles = {m["title"] for m in results}
+    assert titles == {"会議メモ", "買い物リスト"}
+
+
+def test_search_matched_keywords_per_memo():
+    create_memo_db("会議メモのリスト", "")  # 両方に一致
+    create_memo_db("買い物メモ", "")  # メモ のみ
+    create_memo_db("やることリスト", "")  # リスト のみ
+
+    by_title = {m["title"]: m["matched_keywords"] for m in search_memos_db(["メモ", "リスト"])}
+    assert by_title["会議メモのリスト"] == ["メモ", "リスト"]
+    assert by_title["買い物メモ"] == ["メモ"]
+    assert by_title["やることリスト"] == ["リスト"]
+
+
 def test_search_is_case_insensitive():
     create_memo_db("Meeting Notes", "")
-    results = search_memos_db("meeting")
+    results = search_memos_db(["meeting"])
     assert len(results) == 1
     assert results[0]["title"] == "Meeting Notes"
 
 
 def test_search_does_not_match_summary():
     create_memo_db("タイトル", "本文に検索語ピザを含む")
-    assert search_memos_db("ピザ") == []
+    assert search_memos_db(["ピザ"]) == []
 
 
 def test_search_escapes_like_wildcards():
     create_memo_db("100%達成", "")
     create_memo_db("達成度", "")
     # '%' はリテラル扱いされ、全件マッチにならない
-    results = search_memos_db("100%")
+    results = search_memos_db(["100%"])
     assert len(results) == 1
     assert results[0]["title"] == "100%達成"
 
 
 def test_search_no_match():
     create_memo_db("foo", "")
-    assert search_memos_db("zzz") == []
+    assert search_memos_db(["zzz"]) == []
+
+
+def test_search_empty_keywords():
+    create_memo_db("foo", "")
+    assert search_memos_db([]) == []
 
 
 def test_update_changes_fields():

@@ -55,7 +55,13 @@ SQLite with WAL journaling (`memo.db`)。`init_db()` がサーバー起動時に
 
 ### Search
 
-`search_memos_db` はタイトルの部分一致 (`title LIKE '%query%'`) で検索する。LIKE のワイルドカード (`%` `_`) と `\` は `ESCAPE '\'` でリテラル化するため、ユーザー入力に含まれても全件マッチにならない。SQLite の `LIKE` は ASCII 範囲で大文字小文字を区別しない。
+`search_memos_db(keywords: list[str], limit)` はタイトルの部分一致 (`title LIKE '%kw%'`) で検索する。複数キーワードは `OR` で結合し、いずれかに一致したメモを返す。各メモには Python 側で `matched_keywords` (一致したキーワードのリスト) を付与する。LIKE のワイルドカード (`%` `_`) と `\` は `ESCAPE '\'` でリテラル化するため、ユーザー入力に含まれても全件マッチにならない。SQLite の `LIKE` は ASCII 範囲で大文字小文字を区別しない (`matched_keywords` の判定も `str.lower()` で揃える)。
+
+`search_memos` ツールが `query` をカンマで分割し、空文字・重複を除いたキーワードリストにして DB 層へ渡す。
+
+### Tool result の冗長性
+
+`create_memo` / `update_memo` はレコード全体ではなく `delete_memo` と同様の簡潔なメッセージ (`Created memo id=N.` / `Updated memo id=N.`) を返し、LLM のコンテキスト消費を抑える。レコードの中身が必要なときは `get_memo` / `list_memos` / `search_memos` を使う。
 
 ### スキーマを変更する場合
 

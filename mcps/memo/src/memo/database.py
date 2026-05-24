@@ -82,20 +82,39 @@ def list_memos_db(limit: int = 50) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
-def search_memos_db(query: str, limit: int = 50) -> list[dict]:
+def _escape_like(keyword: str) -> str:
+    """LIKE のワイルドカード (``%`` ``_``) と ``\\`` をリテラル化する。"""
+    return keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def search_memos_db(keywords: list[str], limit: int = 50) -> list[dict]:
     """タイトルの部分一致でメモを検索する (大文字小文字を区別しない)。
+
+    複数キーワードはいずれかに一致したメモを返す (OR 検索)。各メモには
+    どのキーワードに一致したかを示す ``matched_keywords`` を付与する。
 
     LIKE のワイルドカード (``%`` ``_``) はリテラルとして扱うため ESCAPE でエスケープする。
     """
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{escaped}%"
+    if not keywords:
+        return []
+    clauses = " OR ".join("title LIKE ? ESCAPE '\\'" for _ in keywords)
+    params: list = [f"%{_escape_like(k)}%" for k in keywords]
+    params.append(limit)
     with _connect_db() as db:
         rows = db.execute(
-            "SELECT * FROM memos WHERE title LIKE ? ESCAPE '\\' "
+            f"SELECT * FROM memos WHERE {clauses} "
             "ORDER BY updated_at DESC, id DESC LIMIT ?",
-            (pattern, limit),
+            params,
         ).fetchall()
-    return [_row_to_dict(r) for r in rows]
+
+    results = []
+    for r in rows:
+        memo = _row_to_dict(r)
+        title_lower = memo["title"].lower()
+        # SQLite の LIKE と同じく ASCII の大文字小文字を区別せずに一致判定する
+        memo["matched_keywords"] = [k for k in keywords if k.lower() in title_lower]
+        results.append(memo)
+    return results
 
 
 def update_memo_db(

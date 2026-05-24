@@ -25,13 +25,13 @@ def create_memo(title: str, summary: str = "") -> str:
 
     title   : メモのタイトル (必須)。
     summary : メモの概要 (任意)。
-    作成されたメモ (id・title・summary・作成/更新日時) を JSON で返す。
+    成功時は作成したメモの id を含む短いメッセージを返す。
     """
     title = title.strip()
     if not title:
         return "Error: title is required."
     memo = create_memo_db(title, summary.strip())
-    return _dump(memo)
+    return f"Created memo id={memo['id']}."
 
 
 @mcp.tool
@@ -67,16 +67,24 @@ def search_memos(query: str, limit: int = 50) -> str:
     """
     タイトルの部分一致でメモを検索する (大文字小文字を区別しない)。
 
-    query : タイトルに含まれる文字列。
+    query : 検索キーワード。カンマ (,) 区切りで複数指定でき、いずれかに
+            部分一致したメモを返す (OR 検索)。
     limit : 取得する最大件数 (デフォルト 50)。
-    一致したメモの配列を JSON で返す。
+    一致したメモの配列を JSON で返す。各メモは matched_keywords を持ち、
+    どのキーワードに一致したかを明示する。
     """
-    query = query.strip()
-    if not query:
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for part in query.split(","):
+        kw = part.strip()
+        if kw and kw not in seen:
+            seen.add(kw)
+            keywords.append(kw)
+    if not keywords:
         return "Error: query is required."
-    memos = search_memos_db(query, limit)
+    memos = search_memos_db(keywords, limit)
     if not memos:
-        return f"No memos matched title containing '{query}'."
+        return f"No memos matched any of: {', '.join(keywords)}."
     return _dump(memos)
 
 
@@ -88,7 +96,7 @@ def update_memo(memo_id: int, title: str | None = None, summary: str | None = No
     memo_id : 更新するメモの ID。
     title   : 新しいタイトル (省略時は変更しない)。
     summary : 新しい概要 (省略時は変更しない)。
-    更新後のメモを JSON で返し、対象が無ければその旨を返す。
+    成功時は短いメッセージを返し、対象が無ければその旨を返す。
     """
     memo = update_memo_db(
         memo_id,
@@ -97,7 +105,7 @@ def update_memo(memo_id: int, title: str | None = None, summary: str | None = No
     )
     if memo is None:
         return f"Memo id={memo_id} not found."
-    return _dump(memo)
+    return f"Updated memo id={memo_id}."
 
 
 @mcp.tool

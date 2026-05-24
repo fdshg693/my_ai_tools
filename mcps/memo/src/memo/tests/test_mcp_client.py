@@ -43,8 +43,11 @@ def test_expected_tools_registered():
 
 def test_crud_roundtrip():
     created, searched = asyncio.run(_crud_roundtrip())
-    assert "会議メモ" in created
+    # create は冗長なレコードではなく簡潔な成功メッセージを返す
+    assert created.startswith("Created memo id=")
+    # search はメモ本体と一致キーワードを返す
     assert "会議メモ" in searched
+    assert "matched_keywords" in searched
 
 
 async def _main():
