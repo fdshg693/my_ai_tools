@@ -10,9 +10,10 @@ This file covers `mcps/memo/` only — a FastMCP-based simple memo (title + summ
 
 ```bash
 # Run the MCP server (stdio transport — Claude Desktop / VS Code はこの方式で接続する)
-uv run memo
+# --user でこのプロセスの所有ユーザーを指定する (環境変数 MEMO_USER でも可)
+uv run memo --user alice
 
-# Run the MCP server (HTTP transport — デプロイ向け)
+# Run the MCP server (HTTP transport — デプロイ向け)。接続側は /mcp?user=NAME を指定する
 TRANSPORT=http PORT=8080 uv run memo
 
 # 単体テスト (DB の CRUD・検索)
@@ -30,9 +31,10 @@ The server exposes 6 MCP tools: `create_memo`, `get_memo`, `list_memos`, `search
 
 | Module | Responsibility |
 |--------|---------------|
-| `database.py` | SQLite connection factory (`_connect_db`), `init_db()` (起動時スキーマ初期化), メモの CRUD・検索ヘルパー (`*_db` 関数群)。`DB_PATH` は環境変数 `MEMO_DB_PATH` で上書き可能 |
-| `tools.py` | 6 個の `@mcp.tool` 関数。`database.py` のヘルパーを薄くラップし、結果を JSON 文字列で返す |
-| `main.py` | `mcp` FastMCP instance と entry point (`main()`)。`TRANSPORT` 環境変数で stdio / http を切り替え。`/health` ヘルスチェックを `@mcp.custom_route` で登録 |
+| `database.py` | SQLite connection factory (`_connect_db`), `init_db()` (起動時スキーマ初期化 + `user` カラムの軽量マイグレーション), メモの CRUD・検索ヘルパー (`*_db` 関数群)。全関数は第1引数に `user` を取り、その user のメモだけを対象にする。`DB_PATH` は環境変数 `MEMO_DB_PATH` で上書き可能 |
+| `auth.py` | 接続中ユーザーの識別。`current_user()` が HTTP リクエストコンテキスト内ならクエリパラメータ `user` を、stdio なら起動時に `set_stdio_user()` で記録した値を返す。識別できなければ None |
+| `tools.py` | 6 個の `@mcp.tool` 関数。各ツールは冒頭で `current_user()` を解決し、None なら拒否。`database.py` のヘルパーを薄くラップし、結果を JSON 文字列で返す |
+| `main.py` | `mcp` FastMCP instance と entry point (`main()`)。`--user` 引数 (or `MEMO_USER`) を argparse で取り stdio 用に記録。`TRANSPORT` 環境変数で stdio / http を切り替え。`/health` ヘルスチェックを `@mcp.custom_route` で登録 |
 | `tests/conftest.py` | pytest 共通設定。DB パスを一時ファイルに差し替え、各テスト前にテーブルを空にする |
 | `tests/test_database.py` | DB 操作の単体テスト (CRUD + タイトル部分一致検索、LIKE ワイルドカードのエスケープ) |
 | `tests/test_mcp_client.py` | MCPクライアントによるツール登録確認 + CRUD ラウンドトリップ (pytest-asyncio に依存せず `asyncio.run()` で実行) |
@@ -48,10 +50,15 @@ SQLite with WAL journaling (`memo.db`)。`init_db()` がサーバー起動時に
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | INTEGER PK | Auto-increment |
+| `user` | TEXT NOT NULL | 所有ユーザー名。`idx_memos_user` で索引付け |
 | `title` | TEXT NOT NULL | タイトル |
 | `summary` | TEXT NOT NULL DEFAULT '' | 概要 |
 | `created_at` | TEXT NOT NULL | 作成日時 |
 | `updated_at` | TEXT NOT NULL | 更新日時 (update 時に `datetime('now')` で更新) |
+
+### User isolation
+
+メモは作成した接続ユーザーが所有する。全 `*_db` ヘルパーは `WHERE user = ?` で絞り込むため、他ユーザーのメモは一覧・検索に出ず、`get`/`update`/`delete` で他人の ID を指定しても「対象なし」(None / False) となり、存在自体を漏らさない。`init_db()` は `user` カラムが無い既存 DB を `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` で移行する (旧メモは `user=''` でアクセス不能になる)。
 
 ### Search
 
@@ -65,4 +72,4 @@ SQLite with WAL journaling (`memo.db`)。`init_db()` がサーバー起動時に
 
 ### スキーマを変更する場合
 
-`init_db()` の `CREATE TABLE` を更新する。既存 DB がある場合は `ALTER TABLE` によるマイグレーションが必要になるが、現状は単一テーブルのためマイグレーション機構は持たない (必要になれば `dynamic_prompt` の `_MIGRATIONS` 方式を参考にする)。
+`init_db()` の `CREATE TABLE` を更新する。既存 DB に列を足す場合は、`user` カラムで使っている軽量パターン (`PRAGMA table_info` で存在確認 → 無ければ `ALTER TABLE ADD COLUMN`) を踏襲する。複数バージョンにまたがる本格的なマイグレーションが必要になれば `dynamic_prompt` の `_MIGRATIONS` 方式を参考にする。

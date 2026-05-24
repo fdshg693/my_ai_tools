@@ -1,0 +1,26 @@
+// claude_desktop_config.jsoncの例
+// Claude Desktop から MCP サーバーに 接続するための設定ファイルの例です。
+{
+    "mcpServers": {
+        "dynamic_prompt": {
+            "command": "uv",
+            "args": [
+                "run",
+                "--project",
+                "your/path/to/my_ai_tools",
+                "dynamic_prompt"
+            ]
+        },
+        "memo": {
+            "command": "uv",
+            "args": [
+                "run",
+                "--project",
+                "your/path/to/my_ai_tools",
+                "memo",
+                "--user",
+                "claude_desktop_stdio" // ユーザー名を指定して、ユーザー専用のメモを管理できるようにする
+            ]
+        }
+    }
+}

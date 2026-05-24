@@ -3,12 +3,16 @@
 サーバーはインプロセスで起動し、ネットワークを使わずにテストする。
 スクリプトとしても (`python -m memo.tests.test_mcp_client`)、pytest としても実行できる。
 pytest-asyncio に依存しないよう、各テストは同期関数内で asyncio.run() する。
+
+インプロセス接続には HTTP リクエストコンテキストが無いため、ユーザーは
+stdio と同じく `set_stdio_user()` で固定する。
 """
 
 import asyncio
 
 from fastmcp import Client
 
+from memo.auth import set_stdio_user
 from memo.main import mcp  # init_db() はモジュール読み込み時に実行される
 
 EXPECTED_TOOLS = {
@@ -36,13 +40,23 @@ async def _crud_roundtrip() -> tuple[str, str]:
         return created.data, searched.data
 
 
+async def _create_without_user() -> str:
+    async with Client(mcp) as client:
+        result = await client.call_tool("create_memo", {"title": "誰のもの?"})
+        return result.data
+
+
 def test_expected_tools_registered():
     names = asyncio.run(_list_tool_names())
     assert EXPECTED_TOOLS <= names
 
 
 def test_crud_roundtrip():
-    created, searched = asyncio.run(_crud_roundtrip())
+    set_stdio_user("tester")
+    try:
+        created, searched = asyncio.run(_crud_roundtrip())
+    finally:
+        set_stdio_user(None)
     # create は冗長なレコードではなく簡潔な成功メッセージを返す
     assert created.startswith("Created memo id=")
     # search はメモ本体と一致キーワードを返す
@@ -50,7 +64,14 @@ def test_crud_roundtrip():
     assert "matched_keywords" in searched
 
 
+def test_rejects_when_user_not_identified():
+    set_stdio_user(None)
+    result = asyncio.run(_create_without_user())
+    assert result.startswith("Error: user is not identified")
+
+
 async def _main():
+    set_stdio_user("demo")
     async with Client(mcp) as client:
         print("=== Server Info ===")
         print(f"Name: {client.initialize_result.serverInfo.name}")
