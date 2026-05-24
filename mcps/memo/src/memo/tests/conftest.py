@@ -25,7 +25,16 @@ _db_mod.init_db()
 
 @pytest.fixture(autouse=True)
 def clean_tables():
-    """各テストの前にテーブルを空にする (スキーマは保持)。"""
+    """各テストの前にテーブルを空にする (スキーマは保持)。
+
+    ``users`` も空にするが、特権ユーザー ``admin`` は init_db と同じく必ず
+    シードし直す (ブートストラップを保つ)。
+    """
     with _db_mod._connect_db() as db:
         db.execute("DELETE FROM memos")
+        db.execute("DELETE FROM users")
+        db.execute(
+            "INSERT OR IGNORE INTO users (name, display_name) VALUES (?, ?)",
+            (_db_mod.ADMIN_USER, "Administrator"),
+        )
     yield

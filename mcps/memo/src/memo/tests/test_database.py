@@ -1,12 +1,19 @@
-"""DB 操作の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離)。"""
+"""DB 操作の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離 + admin 特権 + ユーザー台帳)。"""
 
 from memo.database import (
+    ADMIN_USER,
     create_memo_db,
+    create_user_db,
     delete_memo_db,
+    delete_user_db,
     get_memo_db,
+    get_user_db,
+    is_registered_user,
     list_memos_db,
+    list_users_db,
     search_memos_db,
     update_memo_db,
+    update_user_db,
 )
 
 ALICE = "alice"
@@ -195,3 +202,136 @@ def test_delete_other_users_memo_returns_false():
     assert delete_memo_db(BOB, memo["id"]) is False
     # alice 側には残っている
     assert get_memo_db(ALICE, memo["id"]) is not None
+
+
+# ---------------------------------------------------------------------------
+# admin 特権: is_admin=True で全ユーザー (user='' の孤立メモ含む) を操作できる
+# ---------------------------------------------------------------------------
+
+
+def test_admin_get_any_users_memo():
+    memo = create_memo_db(ALICE, "alice の秘密", "")
+    # admin は所有者を問わず取得できる
+    fetched = get_memo_db(ADMIN_USER, memo["id"], is_admin=True)
+    assert fetched is not None
+    assert fetched["user"] == ALICE
+
+
+def test_admin_get_orphan_memo():
+    # user='' の孤立メモ (旧 DB からの移行など) も admin は取得できる
+    orphan = create_memo_db("", "孤立メモ", "")
+    assert get_memo_db(ADMIN_USER, orphan["id"], is_admin=True) is not None
+    # 通常ユーザーからは見えない
+    assert get_memo_db(ALICE, orphan["id"]) is None
+
+
+def test_admin_list_all_users_memos():
+    create_memo_db(ALICE, "alice-1")
+    create_memo_db(BOB, "bob-1")
+    create_memo_db("", "orphan-1")
+    titles = {m["title"] for m in list_memos_db(ADMIN_USER, is_admin=True)}
+    assert titles == {"alice-1", "bob-1", "orphan-1"}
+
+
+def test_admin_search_all_users_memos():
+    create_memo_db(ALICE, "共有メモ", "")
+    create_memo_db(BOB, "共有メモ", "")
+    results = search_memos_db(ADMIN_USER, ["共有"], is_admin=True)
+    assert {m["user"] for m in results} == {ALICE, BOB}
+
+
+def test_admin_update_any_users_memo():
+    memo = create_memo_db(ALICE, "alice のメモ", "元")
+    updated = update_memo_db(ADMIN_USER, memo["id"], title="admin が更新", is_admin=True)
+    assert updated["title"] == "admin が更新"
+    # 所有者は変わらない
+    assert updated["user"] == ALICE
+
+
+def test_admin_delete_any_users_memo():
+    memo = create_memo_db(ALICE, "alice のメモ", "")
+    assert delete_memo_db(ADMIN_USER, memo["id"], is_admin=True) is True
+    assert get_memo_db(ALICE, memo["id"]) is None
+
+
+# ---------------------------------------------------------------------------
+# ユーザー台帳 (users テーブル) の CRUD
+# ---------------------------------------------------------------------------
+
+
+def test_admin_is_seeded():
+    # init_db / conftest が admin をシードしている
+    assert is_registered_user(ADMIN_USER) is True
+
+
+def test_create_and_get_user():
+    user = create_user_db(ALICE, display_name="アリス", note="営業部")
+    assert user["name"] == ALICE
+    assert user["display_name"] == "アリス"
+    assert user["note"] == "営業部"
+    assert user["created_at"]
+    assert user["updated_at"]
+    assert get_user_db(ALICE) == user
+    assert is_registered_user(ALICE) is True
+
+
+def test_create_user_defaults():
+    user = create_user_db(BOB)
+    assert user["display_name"] == ""
+    assert user["note"] == ""
+
+
+def test_create_duplicate_user_returns_none():
+    create_user_db(ALICE)
+    assert create_user_db(ALICE) is None
+
+
+def test_get_missing_user_returns_none():
+    assert get_user_db("nobody") is None
+
+
+def test_unregistered_user_is_not_registered():
+    assert is_registered_user("nobody") is False
+
+
+def test_list_users_sorted():
+    create_user_db("charlie")
+    create_user_db(ALICE)
+    create_user_db(BOB)
+    names = [u["name"] for u in list_users_db()]
+    # admin (シード済み) も含めて名前順
+    assert names == sorted([ADMIN_USER, ALICE, BOB, "charlie"])
+
+
+def test_update_user_attributes():
+    create_user_db(ALICE, display_name="旧名", note="旧メモ")
+    updated = update_user_db(ALICE, display_name="新名", note="新メモ")
+    assert updated["display_name"] == "新名"
+    assert updated["note"] == "新メモ"
+    # name (識別子) は不変
+    assert updated["name"] == ALICE
+
+
+def test_update_user_partial():
+    create_user_db(ALICE, display_name="アリス", note="残す")
+    updated = update_user_db(ALICE, display_name="改名のみ")
+    assert updated["display_name"] == "改名のみ"
+    assert updated["note"] == "残す"
+
+
+def test_update_missing_user_returns_none():
+    assert update_user_db("nobody", display_name="x") is None
+
+
+def test_delete_user_keeps_memos():
+    create_user_db(ALICE)
+    memo = create_memo_db(ALICE, "alice のメモ", "")
+    assert delete_user_db(ALICE) is True
+    assert is_registered_user(ALICE) is False
+    # メモは残り、admin だけが操作できる
+    assert get_memo_db(ADMIN_USER, memo["id"], is_admin=True) is not None
+    assert get_memo_db(ALICE, memo["id"]) is not None  # DB 層は user 一致なら取れる
+
+
+def test_delete_missing_user_returns_false():
+    assert delete_user_db("nobody") is False

@@ -13,6 +13,7 @@ import asyncio
 from fastmcp import Client
 
 from memo.auth import set_stdio_user
+from memo.database import ADMIN_USER, create_memo_db, create_user_db
 from memo.main import mcp  # init_db() はモジュール読み込み時に実行される
 
 EXPECTED_TOOLS = {
@@ -22,6 +23,11 @@ EXPECTED_TOOLS = {
     "search_memos",
     "update_memo",
     "delete_memo",
+    "create_user",
+    "get_user",
+    "list_users",
+    "update_user",
+    "delete_user",
 }
 
 
@@ -40,9 +46,9 @@ async def _crud_roundtrip() -> tuple[str, str]:
         return created.data, searched.data
 
 
-async def _create_without_user() -> str:
+async def _call(tool: str, args: dict) -> str:
     async with Client(mcp) as client:
-        result = await client.call_tool("create_memo", {"title": "誰のもの?"})
+        result = await client.call_tool(tool, args)
         return result.data
 
 
@@ -52,6 +58,7 @@ def test_expected_tools_registered():
 
 
 def test_crud_roundtrip():
+    create_user_db("tester")  # 登録済みユーザーでないと拒否される
     set_stdio_user("tester")
     try:
         created, searched = asyncio.run(_crud_roundtrip())
@@ -66,12 +73,60 @@ def test_crud_roundtrip():
 
 def test_rejects_when_user_not_identified():
     set_stdio_user(None)
-    result = asyncio.run(_create_without_user())
+    result = asyncio.run(_call("create_memo", {"title": "誰のもの?"}))
     assert result.startswith("Error: user is not identified")
 
 
+def test_rejects_unregistered_user():
+    set_stdio_user("ghost")  # users 台帳に居ない
+    try:
+        result = asyncio.run(_call("create_memo", {"title": "幽霊のメモ"}))
+    finally:
+        set_stdio_user(None)
+    assert "is not registered" in result
+
+
+def test_user_management_is_admin_only():
+    create_user_db("alice")
+    set_stdio_user("alice")  # 登録済みだが admin ではない
+    try:
+        result = asyncio.run(_call("list_users", {}))
+    finally:
+        set_stdio_user(None)
+    assert result == "Error: this tool is admin-only."
+
+
+def test_admin_sees_all_users_memos():
+    create_user_db("alice")
+    create_memo_db("alice", "alice の会議メモ", "")
+    set_stdio_user(ADMIN_USER)
+    try:
+        listed = asyncio.run(_call("list_memos", {}))
+    finally:
+        set_stdio_user(None)
+    assert "alice の会議メモ" in listed
+
+
+def test_admin_can_create_user():
+    set_stdio_user(ADMIN_USER)
+    try:
+        result = asyncio.run(_call("create_user", {"name": "newbie"}))
+    finally:
+        set_stdio_user(None)
+    assert result == "Created user 'newbie'."
+
+
+def test_admin_cannot_delete_self():
+    set_stdio_user(ADMIN_USER)
+    try:
+        result = asyncio.run(_call("delete_user", {"name": ADMIN_USER}))
+    finally:
+        set_stdio_user(None)
+    assert "cannot delete the admin user" in result
+
+
 async def _main():
-    set_stdio_user("demo")
+    set_stdio_user(ADMIN_USER)  # admin はシード済みなので必ず接続できる
     async with Client(mcp) as client:
         print("=== Server Info ===")
         print(f"Name: {client.initialize_result.serverInfo.name}")
