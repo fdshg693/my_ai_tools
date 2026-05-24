@@ -29,17 +29,29 @@ The server exposes 11 MCP tools. **Memo tools (6):** `create_memo`, `get_memo`, 
 
 ### Module structure
 
+ドメイン (memo / user) でファイルを分け、データアクセス (`repository`) ・認可 (`authz`) ・MCP インターフェース (`tools`) のレイヤーを分離している。
+
 | Module | Responsibility |
 |--------|---------------|
-| `database.py` | SQLite connection factory (`_connect_db`), `init_db()` (起動時スキーマ初期化 + `user` カラムの軽量マイグレーション + `users` テーブル作成 + `admin` シード), メモの CRUD・検索ヘルパー (`*_memo_db`) とユーザー台帳の CRUD ヘルパー (`*_user_db` / `is_registered_user`)。メモ系の get/list/search/update/delete は末尾に `is_admin` を取り、True のとき user 絞り込みを外して全メモを対象にする。`ADMIN_USER = "admin"`。`DB_PATH` は環境変数 `MEMO_DB_PATH` で上書き可能 |
-| `auth.py` | 接続中ユーザーの識別。`current_user()` が HTTP リクエストコンテキスト内ならクエリパラメータ `user` を、stdio なら起動時に `set_stdio_user()` で記録した値を返す。識別できなければ None。登録判定 (`is_registered_user`) と admin 判定は tools 側で行う |
-| `tools.py` | 11 個の `@mcp.tool` 関数。共通の `_auth()` が `current_user()` → 登録チェック (`is_registered_user`) を行い `(user, is_admin, error)` を返す。`error` があればツールはそれを返して中断。メモツールは `is_admin` を DB 層へ渡す。ユーザー管理ツールは `is_admin` でなければ `admin-only` エラー。結果は JSON 文字列で返す |
+| `database.py` | 共有インフラのみ。SQLite connection factory (`_connect_db`)、`init_db()` (起動時スキーマ初期化 + `user` カラムの軽量マイグレーション + `users` テーブル作成 + `admin` シード)、定数 `ADMIN_USER = "admin"`。`DB_PATH` は環境変数 `MEMO_DB_PATH` で上書き可能。ドメインの CRUD は持たない |
+| `repository/memo.py` | メモ (`memos`) の純粋なデータアクセス (`*_memo_db`)。get/list/search/update/delete は末尾に `is_admin` を取り、True のとき user 絞り込みを外して全メモ (孤立メモ含む) を対象にする。`_connect_db` を使うのみで認可は扱わない |
+| `repository/user.py` | ユーザー台帳 (`users`) のデータアクセス (`*_user_db`) と登録判定 (`is_registered_user`)。`name` は不変の識別子、`display_name`/`note` が編集可能。ユーザー削除はメモを消さない |
+| `auth.py` | 接続中ユーザーの**識別のみ**。`current_user()` が HTTP リクエストコンテキスト内ならクエリパラメータ `user` を、stdio なら起動時に `set_stdio_user()` で記録した値を返す。識別できなければ None |
+| `authz.py` | **認可** (両ドメイン共通)。`resolve_caller()` が `current_user()` → 登録チェック (`is_registered_user`) を行い `(user, is_admin, error)` を返す。`error` があればツールはそれを返して中断。エラー定数 (`NO_USER_ERROR` / `ADMIN_ONLY_ERROR` / `not_registered_error`) もここ |
+| `tools/__init__.py` | サブモジュール (`memo`, `user`) を読み込みツールを登録する side-effect import |
+| `tools/memo.py` | メモ管理の 6 個の `@mcp.tool`。`resolve_caller()` で認可し、`is_admin` を `repository.memo` へ渡す。結果は JSON 文字列で返す |
+| `tools/user.py` | ユーザー管理の 5 個の `@mcp.tool` (admin 専用)。`resolve_caller()` の後 `is_admin` でなければ `ADMIN_ONLY_ERROR`。`delete_user` は `admin` 自身を拒否 |
 | `main.py` | `mcp` FastMCP instance と entry point (`main()`)。`--user` 引数 (or `MEMO_USER`) を argparse で取り stdio 用に記録。`TRANSPORT` 環境変数で stdio / http を切り替え。`/health` ヘルスチェックを `@mcp.custom_route` で登録 |
-| `tests/conftest.py` | pytest 共通設定。DB パスを一時ファイルに差し替え、各テスト前にテーブルを空にする |
-| `tests/test_database.py` | DB 操作の単体テスト (CRUD + タイトル部分一致検索、LIKE ワイルドカードのエスケープ) |
-| `tests/test_mcp_client.py` | MCPクライアントによるツール登録確認 + CRUD ラウンドトリップ (pytest-asyncio に依存せず `asyncio.run()` で実行) |
+| `tests/conftest.py` | pytest 共通設定。DB パスを一時ファイルに差し替え、各テスト前にテーブルを空にし `admin` を再シードする |
+| `tests/test_memo_repository.py` | `repository.memo` の単体テスト (CRUD + 検索 + ユーザー分離 + admin 特権) |
+| `tests/test_user_repository.py` | `repository.user` の単体テスト (ユーザー台帳 CRUD + 登録判定) |
+| `tests/test_mcp_client.py` | MCP クライアント経由の結合テスト (ツール登録確認 + 認可 + admin 横断 + ユーザー管理。pytest-asyncio に依存せず `asyncio.run()` で実行) |
 
-`main.py` creates the `mcp` instance, then `tools.py` imports it via side-effect import (`import memo.tools`) to register tool functions. `init_db()` はモジュールレベルで呼ばれるため、どの起動経路でも確実に DB 初期化される。
+`main.py` creates the `mcp` instance, then imports `memo.tools` via side-effect import; `tools/__init__.py` がサブモジュール (`tools.memo` / `tools.user`) を読み込み全ツールを登録する。`init_db()` はモジュールレベルで呼ばれるため、どの起動経路でも確実に DB 初期化される。
+
+### レイヤーの依存方向
+
+`tools/*` → `authz` → `repository/*` → `database` の一方向。`authz` は `auth` (識別) と `repository.user` (登録判定) を使う。`database` はどのドメイン層にも依存しない。新しいドメインを足すときは `repository/<domain>.py` と `tools/<domain>.py` を追加し、`tools/__init__.py` に読み込みを足す。
 
 ### Database
 

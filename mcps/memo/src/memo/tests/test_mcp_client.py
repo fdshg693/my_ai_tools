@@ -13,8 +13,10 @@ import asyncio
 from fastmcp import Client
 
 from memo.auth import set_stdio_user
-from memo.database import ADMIN_USER, create_memo_db, create_user_db
+from memo.database import ADMIN_USER
 from memo.main import mcp  # init_db() はモジュール読み込み時に実行される
+from memo.repository.memo import create_memo_db
+from memo.repository.user import create_user_db
 
 EXPECTED_TOOLS = {
     "create_memo",
