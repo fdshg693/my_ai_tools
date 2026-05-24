@@ -179,8 +179,14 @@ def _connect_db() -> sqlite3.Connection:
     """毎回新しい接続を返す。FastMCP (HTTP) は複数スレッドでツールを呼ぶため、
     接続をグローバルに使い回すと 'SQLite objects created in a thread can only
     be used in that same thread' エラーになる。呼び出し側は `with _connect_db() as db:`
-    で使うこと。"""
-    return sqlite3.connect(DB_PATH)
+    で使うこと。
+
+    ``row_factory = sqlite3.Row`` により、行は列名でアクセスできる
+    (``row["is_correct"]``)。位置インデックス (``row[0]``) も後方互換で使えるが、
+    SELECT の列順変更に強い列名アクセスを推奨する。"""
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 # ---------------------------------------------------------------------------
@@ -246,41 +252,38 @@ def submit_quiz_answers(session_id: int, answers: list) -> dict:
         has_free = False
         details = []
         for row, user_ans in zip(rows, answers):
-            qid, idx, text, choices_json, correct_idx, qtype, model_ans = row
-
-            if qtype == "free":
+            if row["question_type"] == "free":
                 has_free = True
                 db.execute(
                     "UPDATE quiz_questions SET user_answer_text = ? WHERE id = ?",
-                    (str(user_ans), qid),
+                    (str(user_ans), row["id"]),
                 )
                 details.append(
                     {
-                        "question_index": idx,
-                        "question_text": text,
+                        "question_index": row["question_index"],
+                        "question_text": row["question_text"],
                         "question_type": "free",
                         "user_answer_text": str(user_ans),
-                        "model_answer": model_ans or "",
+                        "model_answer": row["model_answer"] or "",
                         "is_correct": None,
                     }
                 )
             else:
                 mc_total += 1
                 user_ans_int = int(user_ans)
-                is_correct = 1 if user_ans_int == correct_idx else 0
+                is_correct = 1 if user_ans_int == row["correct_index"] else 0
                 correct_count += is_correct
                 db.execute(
                     "UPDATE quiz_questions SET user_answer = ?, is_correct = ? WHERE id = ?",
-                    (user_ans_int, is_correct, qid),
+                    (user_ans_int, is_correct, row["id"]),
                 )
-                choices = json.loads(choices_json)
                 details.append(
                     {
-                        "question_index": idx,
-                        "question_text": text,
+                        "question_index": row["question_index"],
+                        "question_text": row["question_text"],
                         "question_type": "mc",
-                        "choices": choices,
-                        "correct_index": correct_idx,
+                        "choices": json.loads(row["choices"]),
+                        "correct_index": row["correct_index"],
                         "user_answer": user_ans_int,
                         "is_correct": bool(is_correct),
                     }
@@ -310,7 +313,7 @@ def get_pending_quiz() -> dict | None:
         ).fetchone()
         if not row:
             return None
-        sid, lang_code, title = row
+        sid = row["id"]
         questions = db.execute(
             "SELECT question_index, question_text, choices, correct_index, "
             "question_type, model_answer "
@@ -319,27 +322,27 @@ def get_pending_quiz() -> dict | None:
         ).fetchall()
     result_questions = []
     for q in questions:
-        qtype = q[4] if q[4] else "mc"
+        qtype = q["question_type"] or "mc"
         if qtype == "free":
             result_questions.append(
                 {
-                    "question": q[1],
+                    "question": q["question_text"],
                     "question_type": "free",
                 }
             )
         else:
             result_questions.append(
                 {
-                    "question": q[1],
+                    "question": q["question_text"],
                     "question_type": "mc",
-                    "choices": json.loads(q[2]),
-                    "correct_index": q[3],
+                    "choices": json.loads(q["choices"]),
+                    "correct_index": q["correct_index"],
                 }
             )
     return {
         "session_id": sid,
-        "lang": lang_code,
-        "title": title,
+        "lang": row["lang"],
+        "title": row["title"],
         "questions": result_questions,
     }
 
@@ -354,48 +357,50 @@ def get_quiz_results_db(lang: str, limit: int = 5) -> list[dict]:
             (lang, limit),
         ).fetchall()
         results = []
-        for sid, title, submitted_at, scored_at in sessions:
+        for s in sessions:
             questions = db.execute(
                 "SELECT question_index, question_text, choices, correct_index, "
                 "user_answer, is_correct, question_type, model_answer, user_answer_text "
                 "FROM quiz_questions WHERE session_id = ? ORDER BY question_index",
-                (sid,),
+                (s["id"],),
             ).fetchall()
-            correct_count = sum(1 for q in questions if q[5])
+            correct_count = sum(1 for q in questions if q["is_correct"])
             q_details = []
             for q in questions:
-                qtype = q[6] if q[6] else "mc"
+                qtype = q["question_type"] or "mc"
+                is_correct = q["is_correct"]
                 if qtype == "free":
                     q_details.append(
                         {
-                            "index": q[0],
-                            "question_text": q[1],
+                            "index": q["question_index"],
+                            "question_text": q["question_text"],
                             "question_type": "free",
-                            "model_answer": q[7] or "",
-                            "user_answer_text": q[8] or "",
-                            "is_correct": bool(q[5]) if q[5] is not None else None,
+                            "model_answer": q["model_answer"] or "",
+                            "user_answer_text": q["user_answer_text"] or "",
+                            "is_correct": bool(is_correct) if is_correct is not None else None,
                         }
                     )
                 else:
-                    choices = json.loads(q[2])
+                    choices = json.loads(q["choices"])
+                    user_answer = q["user_answer"]
                     q_details.append(
                         {
-                            "index": q[0],
-                            "question_text": q[1],
+                            "index": q["question_index"],
+                            "question_text": q["question_text"],
                             "question_type": "mc",
-                            "correct_choice": choices[q[3]],
+                            "correct_choice": choices[q["correct_index"]],
                             "user_choice": (
-                                choices[q[4]] if q[4] is not None else "(未回答)"
+                                choices[user_answer] if user_answer is not None else "(未回答)"
                             ),
-                            "is_correct": bool(q[5]),
+                            "is_correct": bool(is_correct),
                         }
                     )
             results.append(
                 {
-                    "session_id": sid,
-                    "title": title,
-                    "submitted_at": submitted_at,
-                    "scored_at": scored_at,
+                    "session_id": s["id"],
+                    "title": s["title"],
+                    "submitted_at": s["submitted_at"],
+                    "scored_at": s["scored_at"],
                     "correct_count": correct_count,
                     "total_count": len(questions),
                     "questions": q_details,
@@ -419,27 +424,31 @@ def get_unscored_sessions_db(lang: str, limit: int = 5) -> list[dict]:
             (lang, limit),
         ).fetchall()
         results = []
-        for sid, title, submitted_at in sessions:
+        for s in sessions:
             questions = db.execute(
                 "SELECT question_index, question_text, model_answer, "
                 "user_answer_text, is_correct "
                 "FROM quiz_questions "
                 "WHERE session_id = ? AND question_type = 'free' "
                 "ORDER BY question_index",
-                (sid,),
+                (s["id"],),
             ).fetchall()
             results.append(
                 {
-                    "session_id": sid,
-                    "title": title,
-                    "submitted_at": submitted_at,
+                    "session_id": s["id"],
+                    "title": s["title"],
+                    "submitted_at": s["submitted_at"],
                     "questions": [
                         {
-                            "question_index": q[0],
-                            "question_text": q[1],
-                            "model_answer": q[2] or "",
-                            "user_answer_text": q[3] or "",
-                            "is_correct": bool(q[4]) if q[4] is not None else None,
+                            "question_index": q["question_index"],
+                            "question_text": q["question_text"],
+                            "model_answer": q["model_answer"] or "",
+                            "user_answer_text": q["user_answer_text"] or "",
+                            "is_correct": (
+                                bool(q["is_correct"])
+                                if q["is_correct"] is not None
+                                else None
+                            ),
                         }
                         for q in questions
                     ],
@@ -522,6 +531,11 @@ def get_past_topics_db(lang: str, limit: int = 20) -> list[dict]:
             (lang, limit),
         ).fetchall()
     return [
-        {"id": r[0], "topic": r[1], "summary": r[2], "created_at": r[3]}
+        {
+            "id": r["id"],
+            "topic": r["topic"],
+            "summary": r["summary"],
+            "created_at": r["created_at"],
+        }
         for r in rows
     ]

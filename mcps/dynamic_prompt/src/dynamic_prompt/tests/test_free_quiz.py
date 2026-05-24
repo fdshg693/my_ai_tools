@@ -52,8 +52,8 @@ class TestSaveFreeQuizSession:
                 "FROM quiz_questions WHERE session_id = ? ORDER BY question_index",
                 (sid,),
             ).fetchall()
-            assert rows[0] == ("mc", None)
-            assert rows[1] == ("free", "answer1")
+            assert (rows[0]["question_type"], rows[0]["model_answer"]) == ("mc", None)
+            assert (rows[1]["question_type"], rows[1]["model_answer"]) == ("free", "answer1")
 
     def test_free_session_starts_as_pending(self):
         sid = save_quiz_session("en", "Free", [

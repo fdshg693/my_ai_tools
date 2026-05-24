@@ -100,7 +100,7 @@ def _process_answer(db, lang: str, word: str, is_correct: bool) -> str:
     if row is None:
         return f"'{word.strip()}': not found"
 
-    status = row[0]
+    status = row["status"]
 
     if is_correct:
         if status == STATUS_UNLEARNED:
@@ -223,7 +223,8 @@ def get_words() -> str:
     if not rows:
         return "No words available for review."
     lines = []
-    for w, ctx, status in rows:
+    for row in rows:
+        w, ctx, status = row["word"], row["context"], row["status"]
         label = _STATUS_LABEL.get(status, status)
         line = f"- {w} [{label}]"
         if ctx:

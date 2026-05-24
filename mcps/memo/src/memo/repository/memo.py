@@ -26,6 +26,18 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def _scope(memo_id: int, user: str, is_admin: bool) -> tuple[str, list]:
+    """ID で1件のメモを指す WHERE 句片とパラメータを返す。
+
+    通常は所有者 (``user``) でも絞り、他人のメモは対象外になる。
+    ``is_admin=True`` は所有者を問わず ID だけで対象を指す (admin 特権)。
+    get/update/delete はこのヘルパーで `is_admin` 分岐を1か所に集約する。
+    """
+    if is_admin:
+        return "id = ?", [memo_id]
+    return "id = ? AND user = ?", [memo_id, user]
+
+
 def create_memo_db(user: str, title: str, summary: str = "") -> dict:
     """メモを新規作成し、作成したレコードを返す。所有者は ``user``。"""
     with _connect_db() as db:
@@ -44,15 +56,9 @@ def get_memo_db(user: str, memo_id: int, is_admin: bool = False) -> dict | None:
     通常は ``user`` が所有しない/存在しなければ None。``is_admin=True`` なら
     所有者を問わず ID だけで取得する。
     """
+    where, params = _scope(memo_id, user, is_admin)
     with _connect_db() as db:
-        if is_admin:
-            row = db.execute(
-                "SELECT * FROM memos WHERE id = ?", (memo_id,)
-            ).fetchone()
-        else:
-            row = db.execute(
-                "SELECT * FROM memos WHERE id = ? AND user = ?", (memo_id, user)
-            ).fetchone()
+        row = db.execute(f"SELECT * FROM memos WHERE {where}", params).fetchone()
     return _row_to_dict(row) if row else None
 
 
@@ -61,17 +67,13 @@ def list_memos_db(user: str, limit: int = 50, is_admin: bool = False) -> list[di
 
     通常は ``user`` のメモのみ。``is_admin=True`` なら全ユーザーのメモを返す。
     """
+    where = "" if is_admin else "WHERE user = ?"
+    params = [] if is_admin else [user]
     with _connect_db() as db:
-        if is_admin:
-            rows = db.execute(
-                "SELECT * FROM memos ORDER BY updated_at DESC, id DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT * FROM memos WHERE user = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
-                (user, limit),
-            ).fetchall()
+        rows = db.execute(
+            f"SELECT * FROM memos {where} ORDER BY updated_at DESC, id DESC LIMIT ?",
+            [*params, limit],
+        ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
@@ -132,15 +134,9 @@ def update_memo_db(
     None。``is_admin=True`` なら所有者を問わず ID で更新する。
     title と summary が両方 None の場合は更新せず既存レコードを返す。
     """
+    where, scope_params = _scope(memo_id, user, is_admin)
     with _connect_db() as db:
-        if is_admin:
-            row = db.execute(
-                "SELECT * FROM memos WHERE id = ?", (memo_id,)
-            ).fetchone()
-        else:
-            row = db.execute(
-                "SELECT * FROM memos WHERE id = ? AND user = ?", (memo_id, user)
-            ).fetchone()
+        row = db.execute(f"SELECT * FROM memos WHERE {where}", scope_params).fetchone()
         if row is None:
             return None
 
@@ -155,26 +151,12 @@ def update_memo_db(
 
         if fields:
             fields.append("updated_at = datetime('now')")
-            if is_admin:
-                params.append(memo_id)
-                db.execute(
-                    f"UPDATE memos SET {', '.join(fields)} WHERE id = ?", params
-                )
-            else:
-                params.append(memo_id)
-                params.append(user)
-                db.execute(
-                    f"UPDATE memos SET {', '.join(fields)} WHERE id = ? AND user = ?",
-                    params,
-                )
-
-        if is_admin:
+            db.execute(
+                f"UPDATE memos SET {', '.join(fields)} WHERE {where}",
+                params + scope_params,
+            )
             row = db.execute(
-                "SELECT * FROM memos WHERE id = ?", (memo_id,)
-            ).fetchone()
-        else:
-            row = db.execute(
-                "SELECT * FROM memos WHERE id = ? AND user = ?", (memo_id, user)
+                f"SELECT * FROM memos WHERE {where}", scope_params
             ).fetchone()
     return _row_to_dict(row)
 
@@ -184,12 +166,8 @@ def delete_memo_db(user: str, memo_id: int, is_admin: bool = False) -> bool:
 
     通常は ``user`` が所有するメモのみ。``is_admin=True`` なら所有者を問わない。
     """
+    where, params = _scope(memo_id, user, is_admin)
     with _connect_db() as db:
-        if is_admin:
-            cursor = db.execute("DELETE FROM memos WHERE id = ?", (memo_id,))
-        else:
-            cursor = db.execute(
-                "DELETE FROM memos WHERE id = ? AND user = ?", (memo_id, user)
-            )
+        cursor = db.execute(f"DELETE FROM memos WHERE {where}", params)
         deleted = cursor.rowcount > 0
     return deleted

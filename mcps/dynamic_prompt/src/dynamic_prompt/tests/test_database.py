@@ -79,7 +79,7 @@ class TestSaveQuizSession:
                 "SELECT lang, title FROM quiz_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
-            assert row == ("en", "Test Quiz")
+            assert (row["lang"], row["title"]) == ("en", "Test Quiz")
 
             qs = db.execute(
                 "SELECT question_text, choices, correct_index "

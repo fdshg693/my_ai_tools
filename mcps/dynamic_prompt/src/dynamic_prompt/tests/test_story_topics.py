@@ -20,7 +20,11 @@ class TestSaveStoryTopic:
                 "SELECT lang, topic, summary FROM story_topics WHERE topic = ?",
                 ("space exploration",),
             ).fetchone()
-        assert row == ("en", "space exploration", "An astronaut visits Mars.")
+        assert (row["lang"], row["topic"], row["summary"]) == (
+            "en",
+            "space exploration",
+            "An astronaut visits Mars.",
+        )
 
     def test_allows_duplicate_topics(self):
         """同じ話題を複数回保存できること（別の物語で同じ話題を使う可能性）。"""
