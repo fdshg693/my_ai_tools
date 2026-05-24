@@ -1,4 +1,4 @@
-"""メモ管理の MCP ツール定義 (CRUD + タイトル部分一致検索)。
+"""メモ管理の MCP ツール定義 (CRUD + タイトル部分一致検索 + セマンティック検索)。
 
 各ツールは冒頭で ``authz.resolve_caller()`` を呼び、識別・登録チェックを通過した
 ``(user, is_admin)`` を得る。``error`` があればそのまま返して中断する。
@@ -9,6 +9,7 @@ repository へ渡すことで全ユーザー (``user=''`` の孤立メモ含む)
 import json
 
 from memo.authz import resolve_caller
+from memo.embedding import EmbeddingError
 from memo.main import mcp
 from memo.repository.memo import (
     create_memo_db,
@@ -18,6 +19,7 @@ from memo.repository.memo import (
     search_memos_db,
     update_memo_db,
 )
+from memo.service import semantic_search
 
 
 def _dump(obj) -> str:
@@ -108,6 +110,34 @@ def search_memos(query: str, limit: int = 50) -> str:
     if not memos:
         return f"No memos matched any of: {', '.join(keywords)}."
     return _dump(memos)
+
+
+@mcp.tool
+def semantic_search_memos(query: str, limit: int = 5) -> str:
+    """
+    メモを概要 (summary) の意味的な近さで検索する (セマンティック検索)。
+
+    query : 検索したい内容を表す文字列 (自然文で可)。
+    limit : 返す最大件数 (デフォルト 5)。
+    タイトル部分一致の search_memos と違い、概要の内容が query に意味的に
+    近いメモを類似度の高い順に返す。各メモには query との類似度
+    (similarity, 0〜1) を付与する。概要が空のメモは対象外。
+    通常は自分のメモのみ、admin は全ユーザーのメモを対象にする。
+    埋め込みに OpenAI API を使うため環境変数 OPENAI_API_KEY が必要。
+    """
+    user, is_admin, error = resolve_caller()
+    if error:
+        return error
+    query = query.strip()
+    if not query:
+        return "Error: query is required."
+    try:
+        results = semantic_search(user, query, limit, is_admin=is_admin)
+    except EmbeddingError as e:
+        return f"Error: {e}"
+    if not results:
+        return "No memos to rank (概要を持つメモがありません)。"
+    return _dump(results)
 
 
 @mcp.tool

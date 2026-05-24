@@ -1,10 +1,12 @@
 [project]
 name = "memo"
 version = "0.1.0"
-description = "シンプルなメモ管理MCPサーバー (タイトル・概要のCRUDとタイトル部分一致検索)"
+description = "シンプルなメモ管理MCPサーバー (タイトル・概要のCRUDとタイトル部分一致検索・概要のセマンティック検索)"
 requires-python = ">=3.13"
 dependencies = [
     "fastmcp>=3.1.0",
+    "openai>=1.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

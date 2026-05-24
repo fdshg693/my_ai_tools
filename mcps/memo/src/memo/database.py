@@ -62,6 +62,19 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO users (name, display_name) VALUES (?, ?)",
             (ADMIN_USER, "Administrator"),
         )
+
+        # セマンティック検索用の埋め込みベクトルキャッシュ。memo_id ごとに1行。
+        # 検索時に遅延計算し、summary_hash / model が一致する間は再利用する。
+        # vector は埋め込みを JSON 配列にしたもの (既存コードの JSON 流儀に合わせる)。
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS memo_embeddings (
+                memo_id      INTEGER PRIMARY KEY,
+                summary_hash TEXT NOT NULL,
+                model        TEXT NOT NULL,
+                vector       TEXT NOT NULL,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
         db.commit()
     finally:
         db.close()

@@ -9,11 +9,14 @@ stdio と同じく `set_stdio_user()` で固定する。
 """
 
 import asyncio
+import json
 
 from fastmcp import Client
 
+from memo import service
 from memo.auth import set_stdio_user
 from memo.database import ADMIN_USER
+from memo.embedding import EmbeddingError
 from memo.main import mcp  # init_db() はモジュール読み込み時に実行される
 from memo.repository.memo import create_memo_db
 from memo.repository.user import create_user_db
@@ -23,6 +26,7 @@ EXPECTED_TOOLS = {
     "get_memo",
     "list_memos",
     "search_memos",
+    "semantic_search_memos",
     "update_memo",
     "delete_memo",
     "create_user",
@@ -125,6 +129,44 @@ def test_admin_cannot_delete_self():
     finally:
         set_stdio_user(None)
     assert "cannot delete the admin user" in result
+
+
+def test_semantic_search_returns_ranked_results(monkeypatch):
+    # 埋め込み API を叩かないよう固定ベクトルに差し替える
+    vectors = {
+        "ペットについて": [1.0, 0.0],
+        "犬と猫": [1.0, 0.0],  # query と同方向 → 類似度高
+        "株の話": [0.0, 1.0],  # query と直交 → 類似度 0
+    }
+    monkeypatch.setattr(service, "embed_text", lambda t: vectors.get(t, [0.0, 0.0]))
+    create_user_db("alice")
+    create_memo_db("alice", "ペットメモ", "犬と猫")
+    create_memo_db("alice", "投資メモ", "株の話")
+    set_stdio_user("alice")
+    try:
+        result = asyncio.run(_call("semantic_search_memos", {"query": "ペットについて"}))
+    finally:
+        set_stdio_user(None)
+    data = json.loads(result)
+    # 類似度の高いペットメモが先頭、各メモに similarity が付く
+    assert data[0]["title"] == "ペットメモ"
+    assert "similarity" in data[0]
+    assert data[0]["similarity"] >= data[-1]["similarity"]
+
+
+def test_semantic_search_reports_embedding_error(monkeypatch):
+    def _boom(_text):
+        raise EmbeddingError("OPENAI_API_KEY is not set.")
+
+    monkeypatch.setattr(service, "embed_text", _boom)
+    create_user_db("alice")
+    create_memo_db("alice", "メモ", "本文")
+    set_stdio_user("alice")
+    try:
+        result = asyncio.run(_call("semantic_search_memos", {"query": "x"}))
+    finally:
+        set_stdio_user(None)
+    assert result.startswith("Error:")
 
 
 async def _main():

@@ -32,6 +32,7 @@ def clean_tables():
     """
     with _db_mod._connect_db() as db:
         db.execute("DELETE FROM memos")
+        db.execute("DELETE FROM memo_embeddings")
         db.execute("DELETE FROM users")
         db.execute(
             "INSERT OR IGNORE INTO users (name, display_name) VALUES (?, ?)",
