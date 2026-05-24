@@ -804,10 +804,12 @@ dependencies = [
     { name = "fastmcp" },
     { name = "openai" },
     { name = "python-dotenv" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "pytest" },
 ]
 
@@ -816,10 +818,14 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.1.0" },
     { name = "openai", specifier = ">=1.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+]
 
 [[package]]
 name = "more-itertools"

@@ -19,6 +19,10 @@ uv run memo --user alice
 # HOST defaults to 127.0.0.1 (local-only). Set HOST=0.0.0.0 only behind auth.
 TRANSPORT=http PORT=8080 uv run memo
 
+# Run the standalone user-management web UI (separate process; opens 127.0.0.1:8090)
+# Reads/writes the same memo.db. Bind/port via MEMO_ADMIN_HOST / MEMO_ADMIN_PORT.
+uv run memo-admin
+
 # Emit the full session picture (Mcp-Session-Id etc.) at DEBUG level on stderr
 uv run memo --user alice --debug        # or env MEMO_LOG_DEBUG=1
 
@@ -84,19 +88,22 @@ Files are split by domain (memo / user), with layers separated into data access 
 | `tools/memo.py` | The 7 memo `@mcp.tool`s. Authorize via `resolve_caller()`, then pass `is_admin` down to `repository.memo` / `service`. Results are returned as JSON strings. `semantic_search_memos` calls `service.semantic_search` and turns `EmbeddingError` into a message. |
 | `tools/user.py` | The 5 user-management `@mcp.tool`s (admin-only) plus `switch_user` (not admin-only). The 5 management tools return `ADMIN_ONLY_ERROR` unless `is_admin`; `delete_user` rejects `admin` itself. `switch_user` only requires `resolve_caller()` to succeed and `target` to be registered, then rewrites stdio user or the HTTP `client_id → user` map. |
 | `logging_middleware.py` | `AuditLogMiddleware` (registered via `mcp.add_middleware`). Overrides `Middleware.on_message` — the outermost hook, so it captures every method incl. `initialize`. INFO: one line per `tools/call` (`tool/user/client_id/session`). DEBUG: full session picture for all methods (`method/request_id/client_id/raw_user/resolved_user/session`). `session` is the raw `Mcp-Session-Id` header. Resolves the user via `auth.current_user()`. |
+| `admin_server.py` | **Standalone user-management web UI** (`memo-admin` script). A Starlette app (built by `create_app()`) serving an admin page (`static/admin.html`) and a `/api/users` REST layer that calls `repository.user` directly. Runs in its own process via `uvicorn.run`; `main()` calls `init_db()` then binds `MEMO_ADMIN_HOST` (default `127.0.0.1`) / `MEMO_ADMIN_PORT` (default `8090`). A transport edge that holds no domain logic (like `logging_middleware`); mirrors the `delete_user` tool's guard by refusing to delete `ADMIN_USER`. Unauthenticated — same local-only security model as `switch_user`. |
+| `static/admin.html` / `admin.css` / `admin.js` | The admin UI (vanilla HTML/CSS/JS, no build step — same approach as `dynamic_prompt/static`). `admin.js` calls the `/api/users` REST endpoints; `name` is immutable so only `display_name`/`note` are editable, and the `admin` row has no delete button. |
 | `main.py` | The `mcp` FastMCP instance (with `AuditLogMiddleware` added right after creation) and the entry point (`main()`). Reads `--user`/`MEMO_USER` and `--debug`/`MEMO_LOG_DEBUG` via argparse; calls `_configure_logging(debug)` (basicConfig to **stderr**; root stays INFO, only `memo.*` goes DEBUG so library noise is excluded). `TRANSPORT` switches stdio/http and is recorded once via `auth.set_http_transport()`; HTTP `HOST` defaults to `127.0.0.1` (local-only; see security note). Registers a `/health` check via `@mcp.custom_route`. |
 | `tests/conftest.py` | Shared pytest setup. Redirects the DB path to a temp file, empties the tables before each test, and re-seeds `admin`. |
 | `tests/test_memo_repository.py` | Unit tests for `repository.memo` (CRUD + search + user isolation + admin privilege). |
 | `tests/test_user_repository.py` | Unit tests for `repository.user` (ledger CRUD + registration check). |
 | `tests/test_embedding_repository.py` | Unit tests for `repository.embedding` (cache get / upsert / overwrite / delete). |
 | `tests/test_semantic_search.py` | Unit tests for `service.semantic_search`. Monkeypatches `service.embed_text` to fixed vectors and verifies ranking, cache hits, recompute on summary change, user isolation, and admin cross-user (no network / API key needed). |
+| `tests/test_admin_server.py` | Tests for the `memo-admin` REST layer via Starlette's `TestClient` (httpx): list/create/get/update/delete, name-required + duplicate (409) + missing (404) cases, partial update (only supplied fields), the `admin`-undeletable guard (403), and HTML serving. Reuses `conftest.py`'s temp DB. |
 | `tests/test_mcp_client.py` | Integration tests through an MCP client (tool registration + authorization + admin cross-user + user management + semantic search; monkeypatches `service.embed_text`. Runs via `asyncio.run()` without depending on pytest-asyncio). Also covers `switch_user` (stdio path), the `current_user` HTTP `client_id` branches (monkeypatching `auth.get_http_request` with a dummy request), and the audit log (`caplog` for the INFO tool line and the DEBUG `initialize` line). |
 
 `main.py` creates the `mcp` instance and adds `AuditLogMiddleware`, then imports `memo.tools` via side-effect import; `tools/__init__.py` loads the submodules (`tools.memo` / `tools.user`) to register all tools. `init_db()` is called at module level, so the DB is reliably initialized on every startup path.
 
 ### Layer dependency direction
 
-`tools/*` → `authz` → `repository/*` → `database`, one-way. `authz` uses `auth` (identification) and `repository.user` (registration check). `database` depends on no domain layer. To add a new domain, add `repository/<domain>.py` and `tools/<domain>.py`, then add the load to `tools/__init__.py`. `logging_middleware` sits at the transport edge (it reads `auth` only) and is orthogonal to these layers.
+`tools/*` → `authz` → `repository/*` → `database`, one-way. `authz` uses `auth` (identification) and `repository.user` (registration check). `database` depends on no domain layer. To add a new domain, add `repository/<domain>.py` and `tools/<domain>.py`, then add the load to `tools/__init__.py`. `logging_middleware` sits at the transport edge (it reads `auth` only) and is orthogonal to these layers. `admin_server` is a second transport edge (a local web UI instead of MCP): it calls `repository.user` directly and never goes through `tools`/`authz`/`auth` (its own process has no MCP connection to identify; it is the unauthenticated local-admin surface, matching `switch_user`'s security model).
 
 Semantic search involves the network (OpenAI call) plus ranking, so it is not placed in the `repository` layer; a **`service` layer** is inserted: `tools/memo.py` → `service` → (`embedding`'s OpenAI call + `repository.embedding` / `repository.memo`). This keeps the invariant that `repository/*` is pure SQLite only, no network.
 
@@ -153,6 +160,23 @@ Only an `admin` connection invokes the memo tools with `is_admin=True`, dropping
 - **HTTP** (shared, multi-client): keyed by the self-supplied `?client_id=` query param, not by `Mcp-Session-Id`. `Mcp-Session-Id` is stable within one connection but **changes on reconnect (re-initialize)**, so it cannot persist switch state; `client_id` is stable across reconnects. `current_user()` seeds `_http_user_by_client[client_id]` from `?user=` with `setdefault` (first value wins), and `switch_user` overwrites it. HTTP without `client_id` cannot hold switch state and `switch_user` returns an error.
 
 **Security**: switching is unauthenticated (personal/local assumption) — any caller can become any registered user incl. `admin`. This is why HTTP `HOST` defaults to `127.0.0.1`. Exposing on `0.0.0.0` requires fronting with real auth.
+
+### User management web UI (`memo-admin`)
+
+`admin_server.py` provides a browser UI for managing the `users` ledger without touching the DB by hand or going through Claude's `create_user` tool. It is a **separate process** (`uv run memo-admin`) that opens the same `memo.db` (SQLite WAL makes concurrent multi-process access safe), so it works even when Claude Desktop isn't running. It deliberately follows the `dynamic_prompt` quiz-server precedent: Starlette + uvicorn + vanilla `static/` assets, no new framework and no Node build chain.
+
+`create_app()` returns the Starlette app (used directly by tests); `main()` calls `init_db()` then `uvicorn.run` on `MEMO_ADMIN_HOST` (default `127.0.0.1`) / `MEMO_ADMIN_PORT` (default `8090`, chosen to avoid the memo HTTP `8080` and quiz `8765` defaults). The REST layer is thin — each handler maps to one `repository.user` call:
+
+| Method | Path | repository call | Notes |
+|--------|------|-----------------|-------|
+| GET | `/` | — | Serves `static/admin.html` |
+| GET | `/api/users` | `list_users_db()` | Array, name-sorted |
+| POST | `/api/users` | `create_user_db(name, display_name, note)` | 400 if `name` blank; 409 if exists; 201 on success |
+| GET | `/api/users/{name}` | `get_user_db(name)` | 404 if missing |
+| PUT | `/api/users/{name}` | `update_user_db(name, display_name, note)` | Omitted fields stay unchanged (sends `None`); `name` immutable; 404 if missing |
+| DELETE | `/api/users/{name}` | `delete_user_db(name)` | 403 for `admin` (mirrors the `delete_user` tool guard); 404 if missing |
+
+**Security**: unauthenticated, same model as `switch_user` — anyone who can reach the port can edit any user incl. `admin`. The default `127.0.0.1` bind keeps it local; `MEMO_ADMIN_HOST=0.0.0.0` logs a warning and must be fronted with real auth.
 
 ### Audit logging
 

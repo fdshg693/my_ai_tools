@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>memo ユーザー管理</title>
+  <link rel="stylesheet" href="/static/admin.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>memo ユーザー管理</h1>
+      <p class="subtitle">登録済みユーザーの追加・編集・削除を行います</p>
+    </header>
+
+    <section class="card">
+      <h2>ユーザーを追加</h2>
+      <form id="create-form" class="row">
+        <input id="new-name" type="text" placeholder="ユーザー名 (必須・一意)" autocomplete="off" required />
+        <input id="new-display" type="text" placeholder="表示名 (任意)" autocomplete="off" />
+        <input id="new-note" type="text" placeholder="メモ (任意)" autocomplete="off" />
+        <button type="submit" class="primary">追加</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>ユーザー一覧</h2>
+        <button id="reload" type="button" class="ghost">再読込</button>
+      </div>
+      <table id="user-table">
+        <thead>
+          <tr>
+            <th>ユーザー名</th>
+            <th>表示名</th>
+            <th>メモ</th>
+            <th>作成日時</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody id="user-rows"></tbody>
+      </table>
+      <p id="empty" class="empty" hidden>ユーザーがいません。</p>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>
