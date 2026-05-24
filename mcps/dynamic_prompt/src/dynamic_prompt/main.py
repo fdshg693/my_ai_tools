@@ -2,13 +2,21 @@
 
 import logging
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.auth.auth import AccessToken
 from fastmcp.server.auth.providers.google import GoogleTokenVerifier
 from starlette.responses import JSONResponse
 
-from dynamic_prompt.database import init_db
+# 環境変数を優先しつつ、mcps/dynamic_prompt/.env をフォールバックとして読み込む
+# (load_dotenv は既存の環境変数を上書きしない)。database が import 時に
+# 環境変数 (DB_PATH 等) を参照するため、それより前に読み込む。
+# __file__ = mcps/dynamic_prompt/src/dynamic_prompt/main.py → parents[2] = mcps/dynamic_prompt
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+from dynamic_prompt.database import init_db  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

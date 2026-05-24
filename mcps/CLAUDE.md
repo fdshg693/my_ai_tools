@@ -1,0 +1,1 @@
+READ `mcps\TEMPLATES.md` for how to structure the files in this MCP server.

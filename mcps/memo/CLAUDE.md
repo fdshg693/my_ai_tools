@@ -2,27 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **About this file**: CLAUDE.md is the AI-facing document. Keep implementation and investigation details here, written in **English**. Human-facing material (startup steps, app overview, caveats) belongs in [README.md](./README.md), written in Japanese. Preserve this split when editing either file.
+
 ## Scope
 
-This file covers `mcps/memo/` only — a FastMCP-based simple memo (title + summary) management MCP server. 検索はタイトル部分一致に加え、概要のセマンティック検索 (OpenAI 埋め込み) も持つ。
+This file covers `mcps/memo/` only — a FastMCP-based MCP server for managing simple memos (title + summary). Search supports both title substring matching and semantic search over summaries (OpenAI embeddings).
 
 ## Commands
 
 ```bash
-# Run the MCP server (stdio transport — Claude Desktop / VS Code はこの方式で接続する)
-# --user でこのプロセスの所有ユーザーを指定する (環境変数 MEMO_USER でも可)
+# Run the MCP server (stdio transport — Claude Desktop / VS Code connect this way)
+# --user sets the owning user for this process (env var MEMO_USER also works)
 uv run memo --user alice
 
-# Run the MCP server (HTTP transport — デプロイ向け)。接続側は /mcp?user=NAME を指定する
+# Run the MCP server (HTTP transport — for deployment). Clients pass /mcp?user=NAME
 TRANSPORT=http PORT=8080 uv run memo
 
-# 単体テスト (DB の CRUD・検索・admin 特権・ユーザー台帳)
+# Unit tests (DB CRUD / search / admin privilege / user ledger)
 uv run --project mcps/memo pytest mcps/memo/src/memo/tests/ -v
 
-# MCPクライアントでツール一覧を確認 (インプロセス接続)
+# Inspect the registered tools via an MCP client (in-process connection)
 uv run python -m memo.tests.test_mcp_client
 
-# セマンティック検索を実環境で試す場合は OpenAI API キーが要る
+# To exercise semantic search against the real API you need an OpenAI key
 OPENAI_API_KEY=sk-... uv run memo --user admin
 ```
 
@@ -30,102 +32,126 @@ OPENAI_API_KEY=sk-... uv run memo --user admin
 
 The server exposes 12 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, `list_memos`, `search_memos`, `semantic_search_memos`, `update_memo`, `delete_memo`. **User management tools (5, admin-only):** `create_user`, `get_user`, `list_users`, `update_user`, `delete_user`.
 
+### Tool reference
+
+**Memo tools** — regular users operate only on their own memos; other users' memos are reported as "not found" so existence is not leaked. `admin` operates on all memos (including orphans owned by `user=''`).
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `create_memo` | `title`, `summary=""` | Create a memo. `title` required. Owner is the connected user (an admin-created memo is owned by `admin`). Returns a short message with the new id. |
+| `get_memo` | `memo_id` | Fetch one memo by id. Own memos only; admin sees any owner. |
+| `list_memos` | `limit=50` | List memos newest-first (`updated_at` desc). Own memos only; admin sees all. |
+| `search_memos` | `query`, `limit=50` | Title substring search. `query` is comma-split into OR keywords; each result carries `matched_keywords`. Own memos only; admin sees all. |
+| `semantic_search_memos` | `query`, `limit=5` | Semantic search over **summaries**. Results carry `similarity` (0–1), sorted desc; empty summaries are excluded. Own memos only; admin sees all. Needs `OPENAI_API_KEY`. |
+| `update_memo` | `memo_id`, `title=None`, `summary=None` | Update only the supplied fields. Own memos only; admin any owner. |
+| `delete_memo` | `memo_id` | Delete a memo. Own memos only; admin any owner. |
+
+**User management tools (admin-only)** — each returns an `admin-only` error unless the caller is `admin`.
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `create_user` | `name`, `display_name=""`, `note=""` | Register a user. `name` required, unique identifier. Returns a no-op message if it already exists. |
+| `get_user` | `name` | Fetch one user. |
+| `list_users` | — | List registered users by name. |
+| `update_user` | `name`, `display_name=None`, `note=None` | Update attributes (display name / note). `name` (identifier) is immutable. |
+| `delete_user` | `name` | Remove a user from the ledger (memos kept). `admin` itself cannot be deleted. |
+
 ### Module structure
 
-ドメイン (memo / user) でファイルを分け、データアクセス (`repository`) ・認可 (`authz`) ・MCP インターフェース (`tools`) のレイヤーを分離している。
+Files are split by domain (memo / user), with layers separated into data access (`repository`), authorization (`authz`), and the MCP interface (`tools`).
 
 | Module | Responsibility |
 |--------|---------------|
-| `database.py` | 共有インフラのみ。SQLite connection factory (`_connect_db`)、`init_db()` (起動時スキーマ初期化 + `user` カラムの軽量マイグレーション + `users` / `memo_embeddings` テーブル作成 + `admin` シード)、定数 `ADMIN_USER = "admin"`。`DB_PATH` は環境変数 `MEMO_DB_PATH` で上書き可能。ドメインの CRUD は持たない |
-| `repository/memo.py` | メモ (`memos`) の純粋なデータアクセス (`*_memo_db`)。get/list/search/update/delete は末尾に `is_admin` を取り、True のとき user 絞り込みを外して全メモ (孤立メモ含む) を対象にする。`_connect_db` を使うのみで認可は扱わない |
-| `repository/user.py` | ユーザー台帳 (`users`) のデータアクセス (`*_user_db`) と登録判定 (`is_registered_user`)。`name` は不変の識別子、`display_name`/`note` が編集可能。ユーザー削除はメモを消さない |
-| `repository/embedding.py` | 埋め込みキャッシュ (`memo_embeddings`) の純粋なデータアクセス。`get_cached_embedding` / `upsert_embedding` (UPSERT) / `delete_embedding`。vector は JSON 配列。ネットワーク・認可は扱わない |
-| `embedding.py` | OpenAI 埋め込み API のラッパ (leaf)。`openai` を import し `OPENAI_API_KEY` を読むのはここだけ。`embed_text(text)`、定数 `MODEL` (`MEMO_EMBEDDING_MODEL` で上書き可)、例外 `EmbeddingError`。キーは呼び出し時に遅延取得。import 時に `python-dotenv` で `mcps/memo/.env` (`parents[2]/.env` 固定) を読み込む (既存の環境変数を優先・上書きしない) |
-| `service.py` | セマンティック検索のオーケストレーション。`semantic_search(user, query, limit, is_admin)` がクエリ埋め込み → 候補取得 (`list_memos_db`) → 概要の埋め込みを get-or-compute (`_embedding_for_memo`) → コサイン類似度 (`_cosine`、純 Python) で降順ソート。**network を呼べる唯一のドメイン層** (repository はネットワーク禁止)。テストは `service.embed_text` を monkeypatch する |
-| `auth.py` | 接続中ユーザーの**識別のみ**。`current_user()` が HTTP リクエストコンテキスト内ならクエリパラメータ `user` を、stdio なら起動時に `set_stdio_user()` で記録した値を返す。識別できなければ None |
-| `authz.py` | **認可** (両ドメイン共通)。`resolve_caller()` が `current_user()` → 登録チェック (`is_registered_user`) を行い `(user, is_admin, error)` を返す。`error` があればツールはそれを返して中断。エラー定数 (`NO_USER_ERROR` / `ADMIN_ONLY_ERROR` / `not_registered_error`) もここ |
-| `tools/__init__.py` | サブモジュール (`memo`, `user`) を読み込みツールを登録する side-effect import |
-| `tools/memo.py` | メモ管理の 7 個の `@mcp.tool`。`resolve_caller()` で認可し、`is_admin` を `repository.memo` / `service` へ渡す。結果は JSON 文字列で返す。`semantic_search_memos` は `service.semantic_search` を呼び `EmbeddingError` を文言にして返す |
-| `tools/user.py` | ユーザー管理の 5 個の `@mcp.tool` (admin 専用)。`resolve_caller()` の後 `is_admin` でなければ `ADMIN_ONLY_ERROR`。`delete_user` は `admin` 自身を拒否 |
-| `main.py` | `mcp` FastMCP instance と entry point (`main()`)。`--user` 引数 (or `MEMO_USER`) を argparse で取り stdio 用に記録。`TRANSPORT` 環境変数で stdio / http を切り替え。`/health` ヘルスチェックを `@mcp.custom_route` で登録 |
-| `tests/conftest.py` | pytest 共通設定。DB パスを一時ファイルに差し替え、各テスト前にテーブルを空にし `admin` を再シードする |
-| `tests/test_memo_repository.py` | `repository.memo` の単体テスト (CRUD + 検索 + ユーザー分離 + admin 特権) |
-| `tests/test_user_repository.py` | `repository.user` の単体テスト (ユーザー台帳 CRUD + 登録判定) |
-| `tests/test_embedding_repository.py` | `repository.embedding` の単体テスト (キャッシュの get / upsert / 上書き / 削除) |
-| `tests/test_semantic_search.py` | `service.semantic_search` の単体テスト。`service.embed_text` を monkeypatch して固定ベクトルにし、ランキング・キャッシュ命中・概要変更時の再計算・ユーザー分離・admin 横断を検証 (ネットワーク・API キー不要) |
-| `tests/test_mcp_client.py` | MCP クライアント経由の結合テスト (ツール登録確認 + 認可 + admin 横断 + ユーザー管理 + セマンティック検索。`service.embed_text` を monkeypatch。pytest-asyncio に依存せず `asyncio.run()` で実行) |
+| `database.py` | Shared infrastructure only. SQLite connection factory (`_connect_db`), `init_db()` (startup schema init + lightweight `user`-column migration + `users` / `memo_embeddings` table creation + `admin` seed), constant `ADMIN_USER = "admin"`. `DB_PATH` overridable via `MEMO_DB_PATH`. Holds no domain CRUD. |
+| `repository/memo.py` | Pure data access for memos (`*_memo_db`). get/list/search/update/delete take a trailing `is_admin`; when True the user filter is dropped to cover all memos (including orphans). Uses only `_connect_db`; no authorization. |
+| `repository/user.py` | Data access for the user ledger (`users`, `*_user_db`) plus the registration check (`is_registered_user`). `name` is the immutable identifier; `display_name`/`note` are editable. Deleting a user does not delete their memos. |
+| `repository/embedding.py` | Pure data access for the embedding cache (`memo_embeddings`): `get_cached_embedding` / `upsert_embedding` (UPSERT) / `delete_embedding`. vector is a JSON array. No network, no authorization. |
+| `embedding.py` | OpenAI embedding API wrapper (leaf). The only place that imports `openai` and reads `OPENAI_API_KEY`. Provides `embed_text(text)`, constant `MODEL` (overridable via `MEMO_EMBEDDING_MODEL`), and exception `EmbeddingError`. The key is fetched lazily at call time. On import it loads `mcps/memo/.env` (fixed `parents[2]/.env`) via `python-dotenv` (existing env vars take precedence; .env does not override). |
+| `service.py` | Semantic-search orchestration. `semantic_search(user, query, limit, is_admin)` embeds the query → fetches candidates (`list_memos_db`) → get-or-computes each summary embedding (`_embedding_for_memo`) → ranks by cosine similarity (`_cosine`, pure Python), desc. **The only domain layer allowed to make network calls** (repositories must not). Tests monkeypatch `service.embed_text`. |
+| `auth.py` | **Identification only** of the connected user. `current_user()` returns the `user` query parameter inside an HTTP request context, or the value recorded by `set_stdio_user()` at startup for stdio. Returns None if it cannot identify. |
+| `authz.py` | **Authorization** (shared by both domains). `resolve_caller()` runs `current_user()` → registration check (`is_registered_user`) and returns `(user, is_admin, error)`. If `error` is set, the tool returns it and stops. Error constants (`NO_USER_ERROR` / `ADMIN_ONLY_ERROR` / `not_registered_error`) live here too. |
+| `tools/__init__.py` | Side-effect import that loads the submodules (`memo`, `user`) to register the tools. |
+| `tools/memo.py` | The 7 memo `@mcp.tool`s. Authorize via `resolve_caller()`, then pass `is_admin` down to `repository.memo` / `service`. Results are returned as JSON strings. `semantic_search_memos` calls `service.semantic_search` and turns `EmbeddingError` into a message. |
+| `tools/user.py` | The 5 user-management `@mcp.tool`s (admin-only). After `resolve_caller()`, returns `ADMIN_ONLY_ERROR` unless `is_admin`. `delete_user` rejects `admin` itself. |
+| `main.py` | The `mcp` FastMCP instance and the entry point (`main()`). Reads the `--user` arg (or `MEMO_USER`) via argparse and records it for stdio. The `TRANSPORT` env var switches stdio / http. Registers a `/health` check via `@mcp.custom_route`. |
+| `tests/conftest.py` | Shared pytest setup. Redirects the DB path to a temp file, empties the tables before each test, and re-seeds `admin`. |
+| `tests/test_memo_repository.py` | Unit tests for `repository.memo` (CRUD + search + user isolation + admin privilege). |
+| `tests/test_user_repository.py` | Unit tests for `repository.user` (ledger CRUD + registration check). |
+| `tests/test_embedding_repository.py` | Unit tests for `repository.embedding` (cache get / upsert / overwrite / delete). |
+| `tests/test_semantic_search.py` | Unit tests for `service.semantic_search`. Monkeypatches `service.embed_text` to fixed vectors and verifies ranking, cache hits, recompute on summary change, user isolation, and admin cross-user (no network / API key needed). |
+| `tests/test_mcp_client.py` | Integration tests through an MCP client (tool registration + authorization + admin cross-user + user management + semantic search; monkeypatches `service.embed_text`. Runs via `asyncio.run()` without depending on pytest-asyncio). |
 
-`main.py` creates the `mcp` instance, then imports `memo.tools` via side-effect import; `tools/__init__.py` がサブモジュール (`tools.memo` / `tools.user`) を読み込み全ツールを登録する。`init_db()` はモジュールレベルで呼ばれるため、どの起動経路でも確実に DB 初期化される。
+`main.py` creates the `mcp` instance, then imports `memo.tools` via side-effect import; `tools/__init__.py` loads the submodules (`tools.memo` / `tools.user`) to register all tools. `init_db()` is called at module level, so the DB is reliably initialized on every startup path.
 
-### レイヤーの依存方向
+### Layer dependency direction
 
-`tools/*` → `authz` → `repository/*` → `database` の一方向。`authz` は `auth` (識別) と `repository.user` (登録判定) を使う。`database` はどのドメイン層にも依存しない。新しいドメインを足すときは `repository/<domain>.py` と `tools/<domain>.py` を追加し、`tools/__init__.py` に読み込みを足す。
+`tools/*` → `authz` → `repository/*` → `database`, one-way. `authz` uses `auth` (identification) and `repository.user` (registration check). `database` depends on no domain layer. To add a new domain, add `repository/<domain>.py` and `tools/<domain>.py`, then add the load to `tools/__init__.py`.
 
-セマンティック検索はネットワーク (OpenAI 呼び出し) とランキングを伴うため、`repository` 層には置かず **`service` 層**を1段挟む: `tools/memo.py` → `service` → (`embedding` の OpenAI 呼び出し + `repository.embedding` / `repository.memo`)。`repository/*` は引き続き純 SQLite のみ・ネットワーク禁止という不変条件を保つ。
+Semantic search involves the network (OpenAI call) plus ranking, so it is not placed in the `repository` layer; a **`service` layer** is inserted: `tools/memo.py` → `service` → (`embedding`'s OpenAI call + `repository.embedding` / `repository.memo`). This keeps the invariant that `repository/*` is pure SQLite only, no network.
 
 ### Database
 
-SQLite with WAL journaling (`memo.db`)。`init_db()` がサーバー起動時にスキーマ作成を行う (冪等)。ツール呼び出しごとにスレッド安全のため新しい接続を返す (`_connect_db`、`row_factory = sqlite3.Row`)。
+SQLite with WAL journaling (`memo.db`). `init_db()` creates the schema at server startup (idempotent). Each tool call returns a fresh connection for thread safety (`_connect_db`, `row_factory = sqlite3.Row`).
 
 **`memos` table:**
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | INTEGER PK | Auto-increment |
-| `user` | TEXT NOT NULL | 所有ユーザー名。`idx_memos_user` で索引付け |
-| `title` | TEXT NOT NULL | タイトル |
-| `summary` | TEXT NOT NULL DEFAULT '' | 概要 |
-| `created_at` | TEXT NOT NULL | 作成日時 |
-| `updated_at` | TEXT NOT NULL | 更新日時 (update 時に `datetime('now')` で更新) |
+| `user` | TEXT NOT NULL | Owning user name. Indexed by `idx_memos_user` |
+| `title` | TEXT NOT NULL | Title |
+| `summary` | TEXT NOT NULL DEFAULT '' | Summary |
+| `created_at` | TEXT NOT NULL | Created timestamp |
+| `updated_at` | TEXT NOT NULL | Updated timestamp (set to `datetime('now')` on update) |
 
 **`users` table:**
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `name` | TEXT PK | ユーザー名 (不変の識別子)。接続許可の判定に使う |
-| `display_name` | TEXT NOT NULL DEFAULT '' | 表示名 (admin が編集可) |
-| `note` | TEXT NOT NULL DEFAULT '' | メモ・備考 (admin が編集可) |
-| `created_at` | TEXT NOT NULL | 作成日時 |
-| `updated_at` | TEXT NOT NULL | 更新日時 |
+| `name` | TEXT PK | User name (immutable identifier). Used to decide whether to allow a connection |
+| `display_name` | TEXT NOT NULL DEFAULT '' | Display name (editable by admin) |
+| `note` | TEXT NOT NULL DEFAULT '' | Note / remarks (editable by admin) |
+| `created_at` | TEXT NOT NULL | Created timestamp |
+| `updated_at` | TEXT NOT NULL | Updated timestamp |
 
-**`memo_embeddings` table** (セマンティック検索の埋め込みキャッシュ):
+**`memo_embeddings` table** (embedding cache for semantic search):
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `memo_id` | INTEGER PK | 対象メモの id (1メモ1行)。FK は張らない (既存スキーマに倣う) |
-| `summary_hash` | TEXT NOT NULL | 埋め込み時の概要の SHA-256。概要が変わると不一致 → 再計算 |
-| `model` | TEXT NOT NULL | 埋め込みモデル名。モデルを変えると不一致 → 再計算 (次元不整合も防ぐ) |
-| `vector` | TEXT NOT NULL | 埋め込みベクトル (JSON 配列) |
-| `created_at` | TEXT NOT NULL | 計算・保存日時 |
+| `memo_id` | INTEGER PK | Target memo id (one row per memo). No FK (follows the existing schema) |
+| `summary_hash` | TEXT NOT NULL | SHA-256 of the summary at embed time. Mismatch when the summary changes → recompute |
+| `model` | TEXT NOT NULL | Embedding model name. Mismatch when the model changes → recompute (also prevents dimension mismatch) |
+| `vector` | TEXT NOT NULL | Embedding vector (JSON array) |
+| `created_at` | TEXT NOT NULL | Computed / stored timestamp |
 
-### User isolation・登録制・admin 特権
+### User isolation / registration / admin privilege
 
-メモは作成した接続ユーザーが所有する。通常 (`is_admin=False`) は全 `*_memo_db` ヘルパーが `WHERE user = ?` で絞り込むため、他ユーザーのメモは一覧・検索に出ず、`get`/`update`/`delete` で他人の ID を指定しても「対象なし」(None / False) となり、存在自体を漏らさない。
+A memo is owned by the connected user that created it. For regular callers (`is_admin=False`), every `*_memo_db` helper filters with `WHERE user = ?`, so other users' memos never appear in list/search, and supplying someone else's id to `get`/`update`/`delete` yields "no match" (None / False) — existence itself is not leaked.
 
-接続は `users` 台帳に登録されたユーザーのみ許可する。`_auth()` が未識別 (`current_user()` が None) と未登録 (`is_registered_user` が False) を両方拒否する。`admin` (`ADMIN_USER`) は `init_db()` で `INSERT OR IGNORE` により必ずシードされる固定ユーザーで、削除できない (`delete_user` がガード)。
+Connections are allowed only for users registered in the `users` ledger. `resolve_caller()` rejects both the unidentified case (`current_user()` is None) and the unregistered case (`is_registered_user` is False). `admin` (`ADMIN_USER`) is the fixed user always seeded by `init_db()` via `INSERT OR IGNORE`, and cannot be deleted (`delete_user` guards it).
 
-`admin` 接続のときだけメモツールが `is_admin=True` で呼ばれ、user 絞り込みを外して全ユーザー (`user=''` の孤立メモ含む) を操作する。ユーザー管理ツール (`*_user`) は `is_admin` でなければ `admin-only` エラー。ユーザーを削除してもメモは残す (削除されたユーザーは未登録となり接続を拒否されるため、残ったメモは admin のみ操作可)。
+Only an `admin` connection invokes the memo tools with `is_admin=True`, dropping the user filter to operate on all users (including orphan memos with `user=''`). User-management tools (`*_user`) return an `admin-only` error unless `is_admin`. Deleting a user keeps their memos (a deleted user becomes unregistered and is refused connection, so the leftover memos are operable only by admin).
 
-`init_db()` は `user` カラムが無い既存 DB を `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` で移行する (旧メモは `user=''` となり通常ユーザーからはアクセス不能だが admin からは操作可能)。
+`init_db()` migrates a legacy DB lacking the `user` column via `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` (old memos become `user=''`: inaccessible to regular users but operable by admin).
 
 ### Search
 
-`search_memos_db(keywords: list[str], limit)` はタイトルの部分一致 (`title LIKE '%kw%'`) で検索する。複数キーワードは `OR` で結合し、いずれかに一致したメモを返す。各メモには Python 側で `matched_keywords` (一致したキーワードのリスト) を付与する。LIKE のワイルドカード (`%` `_`) と `\` は `ESCAPE '\'` でリテラル化するため、ユーザー入力に含まれても全件マッチにならない。SQLite の `LIKE` は ASCII 範囲で大文字小文字を区別しない (`matched_keywords` の判定も `str.lower()` で揃える)。
+`search_memos_db(keywords: list[str], limit)` searches by title substring (`title LIKE '%kw%'`). Multiple keywords are joined with `OR`, returning any memo matching at least one. On the Python side each memo is annotated with `matched_keywords` (the list of keywords it matched). LIKE wildcards (`%` `_`) and `\` are literalized via `ESCAPE '\'`, so user input containing them does not match everything. SQLite's `LIKE` is case-insensitive over ASCII (the `matched_keywords` check is aligned with `str.lower()`).
 
-`search_memos` ツールが `query` をカンマで分割し、空文字・重複を除いたキーワードリストにして DB 層へ渡す。
+The `search_memos` tool splits `query` on commas, drops empty/duplicate entries, and passes the keyword list to the DB layer.
 
 ### Semantic Search
 
-`semantic_search_memos(query, limit=5)` は**概要 (summary) の意味的な近さ**で検索する別ツール。`service.semantic_search` がクエリの埋め込みと各メモ概要の埋め込みのコサイン類似度を計算し、`similarity` (0〜1) を付けて降順で最大 `limit` 件返す。概要が空のメモは対象外。ユーザー分離・admin 横断は候補取得に `list_memos_db(..., is_admin=...)` を再利用して既存と同じ挙動にする。
+`semantic_search_memos(query, limit=5)` is a separate tool that searches by **semantic closeness of the summary**. `service.semantic_search` computes the cosine similarity between the query embedding and each memo summary's embedding, attaches `similarity` (0–1), and returns up to `limit` results in descending order. Empty summaries are excluded. User isolation and admin cross-user reuse candidate fetching via `list_memos_db(..., is_admin=...)`, matching existing behavior.
 
-埋め込みは OpenAI API (`text-embedding-3-small`、多言語) を使い、`OPENAI_API_KEY` が要る (`MEMO_EMBEDDING_MODEL` で上書き可)。キー未設定・API 失敗は `EmbeddingError` となり、ツールが `Error: ...` 文字列にして返す (他ツールには影響しない)。
+Embeddings use the OpenAI API (`text-embedding-3-small`, multilingual) and require `OPENAI_API_KEY` (overridable via `MEMO_EMBEDDING_MODEL`). A missing key or API failure becomes `EmbeddingError`, which the tool returns as an `Error: ...` string (other tools are unaffected).
 
-埋め込みは検索時に**遅延計算**して `memo_embeddings` にキャッシュする (`create_memo`/`update_memo` では計算しない)。`summary_hash` と `model` が一致する間は再利用し、概要やモデルが変わったメモだけ再計算する。`_CANDIDATE_CAP` (=1000) で更新日時の新しい順に上限件数だけランキング対象にする。メモ削除時のキャッシュ行は残るが読まれず無害 (掃除したいときは `repository.embedding.delete_embedding`)。初回の未キャッシュ多数は N+1 回の API 呼び出しになる点に注意 (将来バッチ化の余地)。
+Embeddings are computed **lazily at search time** and cached in `memo_embeddings` (not computed in `create_memo`/`update_memo`). They are reused while `summary_hash` and `model` match; only memos whose summary or model changed are recomputed. `_CANDIDATE_CAP` (=1000) caps the ranking set to the newest-by-`updated_at` memos. Cache rows for deleted memos remain but are not read, so they are harmless (to clean them up, use `repository.embedding.delete_embedding`). Note that a first run with many uncached memos makes N+1 API calls (room for future batching).
 
-### Tool result の冗長性
+### Tool result verbosity
 
-`create_memo` / `update_memo` はレコード全体ではなく `delete_memo` と同様の簡潔なメッセージ (`Created memo id=N.` / `Updated memo id=N.`) を返し、LLM のコンテキスト消費を抑える。レコードの中身が必要なときは `get_memo` / `list_memos` / `search_memos` を使う。
+`create_memo` / `update_memo` return a concise message similar to `delete_memo` (`Created memo id=N.` / `Updated memo id=N.`) rather than the full record, to limit LLM context consumption. When the record contents are needed, use `get_memo` / `list_memos` / `search_memos`.
 
-### スキーマを変更する場合
+### Changing the schema
 
-`init_db()` の `CREATE TABLE` を更新する。既存 DB に列を足す場合は、`user` カラムで使っている軽量パターン (`PRAGMA table_info` で存在確認 → 無ければ `ALTER TABLE ADD COLUMN`) を踏襲する。複数バージョンにまたがる本格的なマイグレーションが必要になれば `dynamic_prompt` の `_MIGRATIONS` 方式を参考にする。
+Update the `CREATE TABLE` statements in `init_db()`. To add a column to an existing DB, follow the lightweight pattern used for the `user` column (`PRAGMA table_info` to check existence → `ALTER TABLE ADD COLUMN` if absent). If a full migration spanning multiple versions becomes necessary, refer to the `_MIGRATIONS` approach in `dynamic_prompt`.

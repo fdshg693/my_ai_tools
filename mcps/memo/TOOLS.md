@@ -1,0 +1,154 @@
+# MCP ツール一覧
+
+memo が公開している 12 個の MCP ツールと、その使い方・注意点をまとめる。引数の細かい仕様は変わりやすいので、ここではツールの**役割**と**他ツールとの関係**を中心に扱う。実際のシグネチャは [tools/memo.py](src/memo/tools/memo.py) / [tools/user.py](src/memo/tools/user.py) の docstring を参照すること。各ツールの内部挙動の詳細は [CLAUDE.md](./CLAUDE.md)、システムプロンプトへの組み込み例は [USECASE.md](./USECASE.md) を参照。
+
+## カテゴリ別早見表
+
+| カテゴリ | ツール |
+|---------|--------|
+| メモ CRUD | `create_memo`, `get_memo`, `list_memos`, `update_memo`, `delete_memo` |
+| メモ検索 | `search_memos` (タイトル部分一致), `semantic_search_memos` (概要の意味検索) |
+| ユーザー管理 (admin 専用) | `create_user`, `get_user`, `list_users`, `update_user`, `delete_user` |
+
+## 前提: 接続ユーザーと権限
+
+すべてのツールは呼び出し時にまず**接続ユーザーを識別・登録チェック**する (`authz.resolve_caller()`)。識別できない、または `users` 台帳に未登録の接続は、全ツールがエラーで拒否される。ユーザーの渡し方はトランスポートで異なる (stdio: 起動引数 `--user` / 環境変数 `MEMO_USER`、HTTP: クエリ `?user=`)。詳細は [README.md](./README.md)。
+
+- **通常ユーザー**: 自分が作成したメモだけを操作できる。他人のメモは一覧・検索に出ず、ID を直接指定しても「not found」になる (存在を漏らさない)。
+- **admin**: ユーザー名が `admin` のときだけ、全ユーザーのメモ (所有者が空の孤立メモを含む) を操作でき、ユーザー管理ツールを使える。`admin` は DB 初期化時に自動登録される。
+
+```
+未登録/未識別 ──► すべてのツールが拒否
+通常ユーザー  ──► 自分のメモのみ (メモ CRUD + 検索)
+admin        ──► 全メモ + ユーザー管理ツール
+```
+
+---
+
+## メモ CRUD
+
+```
+        create_memo ──┐
+                      ▼
+                  memos DB ◀── update_memo / delete_memo
+                      ▲
+        get_memo / list_memos / search_memos / semantic_search_memos
+```
+
+### `create_memo(title, summary="")`
+
+メモを新規作成する。作成者は接続中ユーザーとして記録される。
+
+- **役割**: メモ蓄積の入口。`title` は必須、`summary` は任意。
+- **返却**: 全文ではなく作成した id を含む短いメッセージ (`Created memo id=N.`)。内容が必要なら `get_memo` で取得する。
+- **連携**: `summary` を埋めておくと後で `semantic_search_memos` で意味検索できる。
+
+### `get_memo(memo_id)`
+
+ID 指定で 1 件取得する。
+
+- **役割**: 検索でヒットしたメモの本文を読み込む窓口。
+- **権限**: 通常は自分のメモのみ。admin は所有者を問わず取得できる。見つからなければその旨を返す。
+
+### `list_memos(limit=50)`
+
+メモを新しい順 (更新日時の降順) に一覧する。
+
+- **役割**: 会話冒頭で「既知の情報」を把握する用途に向く。件数が多ければ検索系で絞り込む。
+- **権限**: 通常は自分のメモのみ。admin は全ユーザーのメモ。
+
+### `update_memo(memo_id, title=None, summary=None)`
+
+既存メモを更新する。**指定したフィールドのみ**変更する (省略したフィールドは据え置き)。
+
+- **役割**: 既存メモへの追記・修正。新規作成の代わりに使うと検索しやすい粒度を保てる。
+- **連携**: 更新で `summary` が変わると、次回の `semantic_search_memos` 時に埋め込みが再計算される。
+
+### `delete_memo(memo_id)`
+
+メモを削除する。
+
+- **役割**: 誤りと判明した情報の除去。
+- **権限**: 通常は自分のメモのみ。admin は所有者を問わず削除できる。
+
+---
+
+## メモ検索
+
+検索は 2 系統あり、目的で使い分ける。
+
+### `search_memos(query, limit=50)` — タイトル部分一致 (キーワード型)
+
+タイトルの部分一致で検索する (大文字小文字を区別しない)。
+
+- **使いどころ**: 既知の固有名詞・短いキーワードで探すとき。
+- **OR 検索**: `query` をカンマ (`,`) で区切ると、いずれかに一致したメモを返す。各メモには一致した `matched_keywords` が付く。
+- **対象範囲**: タイトルのみ (概要は対象外)。
+
+### `semantic_search_memos(query, limit=5)` — 概要の意味検索 (自然文型)
+
+概要 (summary) の意味的な近さで検索する。
+
+- **使いどころ**: 「○○に関する話題があったか」を意味で探すとき。`query` は自然文で構わない。
+- **返却**: 概要を埋め込みベクトルで比較し、`similarity` (0〜1) を付けて近い順に返す。概要が空のメモは対象外。
+- **必要要件**: OpenAI API を使うため `OPENAI_API_KEY` が必要 (`mcps/memo/.env` から読み込み可)。キーが無い・API 失敗時はこのツールだけが `Error: ...` を返し、他ツールは影響を受けない。
+- **コスト注意**: 埋め込みは検索時に遅延計算してキャッシュされる。初回に未キャッシュのメモが多いと、その数だけ API を呼ぶ。
+
+> 迷う場合は両方併用してよい。まず `semantic_search_memos` で当たりを付け、`get_memo` で本文を確認する流れが扱いやすい。
+
+---
+
+## ユーザー管理 (admin 専用)
+
+`admin` で接続したときだけ使える。それ以外の接続では `admin-only` エラーを返す。接続を許可するユーザーを管理するためのツール群。
+
+```
+  create_user ──► users 台帳 ──► (登録されたユーザーだけが接続を許可される)
+                     ▲
+  get_user / list_users / update_user / delete_user
+```
+
+### `create_user(name, display_name="", note="")`
+
+新しいユーザーを登録する。登録されたユーザーだけが接続できるようになる。
+
+- `name` は必須・一意の識別子。既に存在すればその旨を返す (no-op)。
+- 新しいユーザーを使い始めるには、まず `admin` で接続してこのツールで登録する。
+
+### `get_user(name)` / `list_users()`
+
+ユーザーを 1 件取得 / 名前順に一覧する。
+
+### `update_user(name, display_name=None, note=None)`
+
+ユーザー属性 (表示名・備考) を更新する。**ユーザー名 (`name`) は不変の識別子で変更できない。**
+
+### `delete_user(name)`
+
+ユーザーを台帳から削除する (以後そのユーザーは接続できない)。
+
+- そのユーザーのメモは**削除せず残す** (以後は admin だけが操作できる)。
+- 特権ユーザー `admin` 自身は削除できない。
+
+---
+
+## 典型的な呼び出し順
+
+**通常ユーザーの会話 (知識の蓄積・活用):**
+
+```
+1. list_memos(50)                 ← 既知の情報を把握 (件数が多ければ検索系で絞る)
+2. semantic_search_memos("...")   ← 今回の話題に関係する過去メモを意味で探す
+   (または search_memos で固有名詞検索)
+3. get_memo(id)                   ← ヒットしたメモの本文を確認
+   ─── 会話 ───
+4. create_memo(title, summary)    ← 新しい内容を保存 (既存の続きなら update_memo)
+```
+
+**admin によるユーザー追加:**
+
+```
+1. admin で接続 (--user admin / ?user=admin)
+2. create_user("alice", ...)      ← 接続を許可するユーザーを登録
+3. 以後 alice は --user alice / ?user=alice で接続可能
+```
