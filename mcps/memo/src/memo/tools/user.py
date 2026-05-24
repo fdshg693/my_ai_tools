@@ -1,13 +1,22 @@
-"""ユーザー管理の MCP ツール定義 (admin 専用)。
+"""ユーザー管理の MCP ツール定義 (主に admin 専用)。
 
-各ツールは ``authz.resolve_caller()`` で識別・登録を確認したうえで、
-``is_admin`` でなければ ``admin-only`` エラーを返す。``name`` は不変の識別子で、
-更新できるのは ``display_name`` / ``note`` のみ。ユーザーを削除してもそのユーザーの
-メモは残り、以後は admin だけが操作できる。
+ユーザー管理ツール (create/get/list/update/delete_user) は ``authz.resolve_caller()`` で
+識別・登録を確認したうえで、``is_admin`` でなければ ``admin-only`` エラーを返す。
+``name`` は不変の識別子で、更新できるのは ``display_name`` / ``note`` のみ。ユーザーを
+削除してもそのユーザーのメモは残り、以後は admin だけが操作できる。
+
+例外として ``switch_user`` は admin 専用ではなく、登録済みユーザーなら誰でも自分の接続の
+現在ユーザーを切り替えられる (個人ローカル運用向け)。
 """
 
 import json
 
+from memo.auth import (
+    http_client_id,
+    set_stdio_user,
+    switch_http_user,
+    transport_is_http,
+)
 from memo.authz import ADMIN_ONLY_ERROR, resolve_caller
 from memo.database import ADMIN_USER
 from memo.main import mcp
@@ -15,6 +24,7 @@ from memo.repository.user import (
     create_user_db,
     delete_user_db,
     get_user_db,
+    is_registered_user,
     list_users_db,
     update_user_db,
 )
@@ -132,3 +142,37 @@ def delete_user(name: str) -> str:
     if not deleted:
         return f"User '{name}' not found."
     return f"Deleted user '{name}'."
+
+
+@mcp.tool
+def switch_user(target: str) -> str:
+    """
+    現在の接続ユーザーを target に切り替える (個人ローカル運用向け・admin 専用ではない)。
+
+    target : 切り替え先のユーザー名 (users 台帳に登録済みであること)。
+    stdio では以後この接続のメモ操作が target のものになる (サーバー再起動は不要)。
+    HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと
+    切り替え状態を保持できない)。admin への切り替えも可能。
+    """
+    _user, _is_admin, error = resolve_caller()
+    if error:
+        return error
+    target = target.strip()
+    if not target:
+        return "Error: target is required."
+    if not is_registered_user(target):
+        return f"Error: user '{target}' is not registered."
+
+    if not transport_is_http():
+        # stdio: モジュール変数を実行時書き換え (GIL 下の単純代入で安全)
+        set_stdio_user(target)
+        return f"Switched user to '{target}'."
+
+    client_id = http_client_id()
+    if client_id is None:
+        return (
+            "Error: HTTP では接続時にクエリ ?client_id=NAME を指定してください "
+            "(client_id が無いと切り替え状態を保持できません)。"
+        )
+    switch_http_user(client_id, target)
+    return f"Switched user to '{target}' (client_id={client_id})."

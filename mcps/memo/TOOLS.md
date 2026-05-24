@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-memo が公開している 12 個の MCP ツールと、その使い方・注意点をまとめる。引数の細かい仕様は変わりやすいので、ここではツールの**役割**と**他ツールとの関係**を中心に扱う。実際のシグネチャは [tools/memo.py](src/memo/tools/memo.py) / [tools/user.py](src/memo/tools/user.py) の docstring を参照すること。各ツールの内部挙動の詳細は [CLAUDE.md](./CLAUDE.md)、システムプロンプトへの組み込み例は [USECASE.md](./USECASE.md) を参照。
+memo が公開している 13 個の MCP ツールと、その使い方・注意点をまとめる。引数の細かい仕様は変わりやすいので、ここではツールの**役割**と**他ツールとの関係**を中心に扱う。実際のシグネチャは [tools/memo.py](src/memo/tools/memo.py) / [tools/user.py](src/memo/tools/user.py) の docstring を参照すること。各ツールの内部挙動の詳細は [CLAUDE.md](./CLAUDE.md)、システムプロンプトへの組み込み例は [USECASE.md](./USECASE.md) を参照。
 
 ## カテゴリ別早見表
 
@@ -9,6 +9,7 @@ memo が公開している 12 個の MCP ツールと、その使い方・注意
 | メモ CRUD | `create_memo`, `get_memo`, `list_memos`, `update_memo`, `delete_memo` |
 | メモ検索 | `search_memos` (タイトル部分一致), `semantic_search_memos` (概要の意味検索) |
 | ユーザー管理 (admin 専用) | `create_user`, `get_user`, `list_users`, `update_user`, `delete_user` |
+| セッション | `switch_user` (現在ユーザーの切り替え。admin 専用ではない) |
 
 ## 前提: 接続ユーザーと権限
 
@@ -129,6 +130,19 @@ ID 指定で 1 件取得する。
 
 - そのユーザーのメモは**削除せず残す** (以後は admin だけが操作できる)。
 - 特権ユーザー `admin` 自身は削除できない。
+
+---
+
+## セッション
+
+### `switch_user(target)` — 現在ユーザーの切り替え (admin 専用ではない)
+
+再接続やサーバー再起動なしに、現在の接続ユーザーを `target` に切り替える。登録済みユーザーなら誰でも呼べる (`admin` への切り替えも可能)。
+
+- **役割**: クライアント側で接続を張り替えられない場合 (Claude アプリなど) に、ツール呼び出し 1 つでユーザーを切り替える。個人ローカル運用向けで、切り替えに認証は要らない。
+- **前提**: `target` は `users` 台帳に登録済みであること。未登録なら拒否される。
+- **stdio**: そのプロセスの現在ユーザーを実行時に書き換える。
+- **HTTP**: 接続時のクエリに `?client_id=` を付けておく必要がある。サーバーは `client_id` ごとに現在ユーザーを保持し、これを書き換える。`client_id` が無い接続では切り替え状態を保持できずエラーになる。詳細は [README.md](./README.md) の「ユーザーの切り替え」。
 
 ---
 

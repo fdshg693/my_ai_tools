@@ -15,10 +15,14 @@ This file covers `mcps/memo/` only — a FastMCP-based MCP server for managing s
 # --user sets the owning user for this process (env var MEMO_USER also works)
 uv run memo --user alice
 
-# Run the MCP server (HTTP transport — for deployment). Clients pass /mcp?user=NAME
+# Run the MCP server (HTTP transport). Clients pass /mcp?user=NAME&client_id=ID
+# HOST defaults to 127.0.0.1 (local-only). Set HOST=0.0.0.0 only behind auth.
 TRANSPORT=http PORT=8080 uv run memo
 
-# Unit tests (DB CRUD / search / admin privilege / user ledger)
+# Emit the full session picture (Mcp-Session-Id etc.) at DEBUG level on stderr
+uv run memo --user alice --debug        # or env MEMO_LOG_DEBUG=1
+
+# Unit tests (DB CRUD / search / admin privilege / user ledger / switch / audit log)
 uv run --project mcps/memo pytest mcps/memo/src/memo/tests/ -v
 
 # Inspect the registered tools via an MCP client (in-process connection)
@@ -30,7 +34,7 @@ OPENAI_API_KEY=sk-... uv run memo --user admin
 
 ## Architecture
 
-The server exposes 12 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, `list_memos`, `search_memos`, `semantic_search_memos`, `update_memo`, `delete_memo`. **User management tools (5, admin-only):** `create_user`, `get_user`, `list_users`, `update_user`, `delete_user`.
+The server exposes 13 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, `list_memos`, `search_memos`, `semantic_search_memos`, `update_memo`, `delete_memo`. **User management tools (5, admin-only):** `create_user`, `get_user`, `list_users`, `update_user`, `delete_user`. **Session tool (1, not admin-only):** `switch_user`.
 
 ### Tool reference
 
@@ -56,6 +60,12 @@ The server exposes 12 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, 
 | `update_user` | `name`, `display_name=None`, `note=None` | Update attributes (display name / note). `name` (identifier) is immutable. |
 | `delete_user` | `name` | Remove a user from the ledger (memos kept). `admin` itself cannot be deleted. |
 
+**Session tool (not admin-only)** — any registered caller may switch the current user.
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `switch_user` | `target` | Switch the connection's current user to `target` (must be registered; `admin` allowed) without reconnecting/restarting. stdio: rewrites the process user via `set_stdio_user`. HTTP: requires `?client_id=`; updates the `client_id → user` map. Errors if `target` unregistered or (HTTP) `client_id` absent. |
+
 ### Module structure
 
 Files are split by domain (memo / user), with layers separated into data access (`repository`), authorization (`authz`), and the MCP interface (`tools`).
@@ -68,24 +78,25 @@ Files are split by domain (memo / user), with layers separated into data access 
 | `repository/embedding.py` | Pure data access for the embedding cache (`memo_embeddings`): `get_cached_embedding` / `upsert_embedding` (UPSERT) / `delete_embedding`. vector is a JSON array. No network, no authorization. |
 | `embedding.py` | OpenAI embedding API wrapper (leaf). The only place that imports `openai` and reads `OPENAI_API_KEY`. Provides `embed_text(text)`, constant `MODEL` (overridable via `MEMO_EMBEDDING_MODEL`), and exception `EmbeddingError`. The key is fetched lazily at call time. On import it loads `mcps/memo/.env` (fixed `parents[2]/.env`) via `python-dotenv` (existing env vars take precedence; .env does not override). |
 | `service.py` | Semantic-search orchestration. `semantic_search(user, query, limit, is_admin)` embeds the query → fetches candidates (`list_memos_db`) → get-or-computes each summary embedding (`_embedding_for_memo`) → ranks by cosine similarity (`_cosine`, pure Python), desc. **The only domain layer allowed to make network calls** (repositories must not). Tests monkeypatch `service.embed_text`. |
-| `auth.py` | **Identification only** of the connected user. `current_user()` returns the `user` query parameter inside an HTTP request context, or the value recorded by `set_stdio_user()` at startup for stdio. Returns None if it cannot identify. |
+| `auth.py` | **Identification only** of the connected user. Transport (http vs stdio) is a startup-time constant: `main()` calls `set_http_transport()` once, and `transport_is_http()` reads that flag (no per-call `get_http_request()` try/except to "detect" the transport). `current_user()`: stdio → the value recorded by `set_stdio_user()`; HTTP → if `?client_id=` is present, looks up the in-memory `_http_user_by_client` map (initializing it from `?user=` via `setdefault`, so a prior `switch_user` value is preserved and middleware double-reads are idempotent), else falls back to `?user=` (backward compatible). In HTTP mode `get_http_request()` is called directly to read the request; if it ever raised outside a request context the error surfaces rather than silently degrading to stdio. Helpers: `http_client_id()`, `transport_is_http()`, `switch_http_user(client_id, target)`. The map is in-memory (reset on restart; no TTL — fine for personal/local use). |
 | `authz.py` | **Authorization** (shared by both domains). `resolve_caller()` runs `current_user()` → registration check (`is_registered_user`) and returns `(user, is_admin, error)`. If `error` is set, the tool returns it and stops. Error constants (`NO_USER_ERROR` / `ADMIN_ONLY_ERROR` / `not_registered_error`) live here too. |
 | `tools/__init__.py` | Side-effect import that loads the submodules (`memo`, `user`) to register the tools. |
 | `tools/memo.py` | The 7 memo `@mcp.tool`s. Authorize via `resolve_caller()`, then pass `is_admin` down to `repository.memo` / `service`. Results are returned as JSON strings. `semantic_search_memos` calls `service.semantic_search` and turns `EmbeddingError` into a message. |
-| `tools/user.py` | The 5 user-management `@mcp.tool`s (admin-only). After `resolve_caller()`, returns `ADMIN_ONLY_ERROR` unless `is_admin`. `delete_user` rejects `admin` itself. |
-| `main.py` | The `mcp` FastMCP instance and the entry point (`main()`). Reads the `--user` arg (or `MEMO_USER`) via argparse and records it for stdio. The `TRANSPORT` env var switches stdio / http. Registers a `/health` check via `@mcp.custom_route`. |
+| `tools/user.py` | The 5 user-management `@mcp.tool`s (admin-only) plus `switch_user` (not admin-only). The 5 management tools return `ADMIN_ONLY_ERROR` unless `is_admin`; `delete_user` rejects `admin` itself. `switch_user` only requires `resolve_caller()` to succeed and `target` to be registered, then rewrites stdio user or the HTTP `client_id → user` map. |
+| `logging_middleware.py` | `AuditLogMiddleware` (registered via `mcp.add_middleware`). Overrides `Middleware.on_message` — the outermost hook, so it captures every method incl. `initialize`. INFO: one line per `tools/call` (`tool/user/client_id/session`). DEBUG: full session picture for all methods (`method/request_id/client_id/raw_user/resolved_user/session`). `session` is the raw `Mcp-Session-Id` header. Resolves the user via `auth.current_user()`. |
+| `main.py` | The `mcp` FastMCP instance (with `AuditLogMiddleware` added right after creation) and the entry point (`main()`). Reads `--user`/`MEMO_USER` and `--debug`/`MEMO_LOG_DEBUG` via argparse; calls `_configure_logging(debug)` (basicConfig to **stderr**; root stays INFO, only `memo.*` goes DEBUG so library noise is excluded). `TRANSPORT` switches stdio/http and is recorded once via `auth.set_http_transport()`; HTTP `HOST` defaults to `127.0.0.1` (local-only; see security note). Registers a `/health` check via `@mcp.custom_route`. |
 | `tests/conftest.py` | Shared pytest setup. Redirects the DB path to a temp file, empties the tables before each test, and re-seeds `admin`. |
 | `tests/test_memo_repository.py` | Unit tests for `repository.memo` (CRUD + search + user isolation + admin privilege). |
 | `tests/test_user_repository.py` | Unit tests for `repository.user` (ledger CRUD + registration check). |
 | `tests/test_embedding_repository.py` | Unit tests for `repository.embedding` (cache get / upsert / overwrite / delete). |
 | `tests/test_semantic_search.py` | Unit tests for `service.semantic_search`. Monkeypatches `service.embed_text` to fixed vectors and verifies ranking, cache hits, recompute on summary change, user isolation, and admin cross-user (no network / API key needed). |
-| `tests/test_mcp_client.py` | Integration tests through an MCP client (tool registration + authorization + admin cross-user + user management + semantic search; monkeypatches `service.embed_text`. Runs via `asyncio.run()` without depending on pytest-asyncio). |
+| `tests/test_mcp_client.py` | Integration tests through an MCP client (tool registration + authorization + admin cross-user + user management + semantic search; monkeypatches `service.embed_text`. Runs via `asyncio.run()` without depending on pytest-asyncio). Also covers `switch_user` (stdio path), the `current_user` HTTP `client_id` branches (monkeypatching `auth.get_http_request` with a dummy request), and the audit log (`caplog` for the INFO tool line and the DEBUG `initialize` line). |
 
-`main.py` creates the `mcp` instance, then imports `memo.tools` via side-effect import; `tools/__init__.py` loads the submodules (`tools.memo` / `tools.user`) to register all tools. `init_db()` is called at module level, so the DB is reliably initialized on every startup path.
+`main.py` creates the `mcp` instance and adds `AuditLogMiddleware`, then imports `memo.tools` via side-effect import; `tools/__init__.py` loads the submodules (`tools.memo` / `tools.user`) to register all tools. `init_db()` is called at module level, so the DB is reliably initialized on every startup path.
 
 ### Layer dependency direction
 
-`tools/*` → `authz` → `repository/*` → `database`, one-way. `authz` uses `auth` (identification) and `repository.user` (registration check). `database` depends on no domain layer. To add a new domain, add `repository/<domain>.py` and `tools/<domain>.py`, then add the load to `tools/__init__.py`.
+`tools/*` → `authz` → `repository/*` → `database`, one-way. `authz` uses `auth` (identification) and `repository.user` (registration check). `database` depends on no domain layer. To add a new domain, add `repository/<domain>.py` and `tools/<domain>.py`, then add the load to `tools/__init__.py`. `logging_middleware` sits at the transport edge (it reads `auth` only) and is orthogonal to these layers.
 
 Semantic search involves the network (OpenAI call) plus ranking, so it is not placed in the `repository` layer; a **`service` layer** is inserted: `tools/memo.py` → `service` → (`embedding`'s OpenAI call + `repository.embedding` / `repository.memo`). This keeps the invariant that `repository/*` is pure SQLite only, no network.
 
@@ -133,6 +144,19 @@ Connections are allowed only for users registered in the `users` ledger. `resolv
 Only an `admin` connection invokes the memo tools with `is_admin=True`, dropping the user filter to operate on all users (including orphan memos with `user=''`). User-management tools (`*_user`) return an `admin-only` error unless `is_admin`. Deleting a user keeps their memos (a deleted user becomes unregistered and is refused connection, so the leftover memos are operable only by admin).
 
 `init_db()` migrates a legacy DB lacking the `user` column via `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` (old memos become `user=''`: inaccessible to regular users but operable by admin).
+
+### User switching
+
+`switch_user(target)` changes the connection's current user without reconnecting/restarting, separating a **stable client identity** from the **mutable current user**:
+
+- **stdio** (per-process, single user): rewrites the module-level `_stdio_user` via `set_stdio_user`. A single-assignment write is atomic under the GIL.
+- **HTTP** (shared, multi-client): keyed by the self-supplied `?client_id=` query param, not by `Mcp-Session-Id`. `Mcp-Session-Id` is stable within one connection but **changes on reconnect (re-initialize)**, so it cannot persist switch state; `client_id` is stable across reconnects. `current_user()` seeds `_http_user_by_client[client_id]` from `?user=` with `setdefault` (first value wins), and `switch_user` overwrites it. HTTP without `client_id` cannot hold switch state and `switch_user` returns an error.
+
+**Security**: switching is unauthenticated (personal/local assumption) — any caller can become any registered user incl. `admin`. This is why HTTP `HOST` defaults to `127.0.0.1`. Exposing on `0.0.0.0` requires fronting with real auth.
+
+### Audit logging
+
+`AuditLogMiddleware` (in `logging_middleware.py`, added via `mcp.add_middleware`) records every call from one place by overriding `Middleware.on_message` (the outermost hook in `_dispatch_handler`, so `initialize`/`tools/list`/`tools/call`/… all pass through). INFO emits one line per `tools/call`; DEBUG (via `--debug`/`MEMO_LOG_DEBUG`) emits the full session picture for all methods, including the raw `Mcp-Session-Id` header — the intended way to observe how the session id stays stable per connection and is replaced on reconnect, alongside the stable `client_id`. The user is resolved with `auth.current_user()` (the `setdefault` seeding makes this idempotent vs. the tool's own `resolve_caller()`). Logs go to **stderr** (stdout carries the stdio JSON-RPC stream); `_configure_logging` keeps root at INFO and raises only `memo.*` to DEBUG.
 
 ### Search
 

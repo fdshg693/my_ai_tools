@@ -12,6 +12,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # 1. DB パスを一時ファイルに差し替え (実 DB を触らないようにする)
 # ---------------------------------------------------------------------------
+import memo.auth as _auth_mod
 import memo.database as _db_mod
 
 _test_db_dir = tempfile.mkdtemp()
@@ -25,11 +26,16 @@ _db_mod.init_db()
 
 @pytest.fixture(autouse=True)
 def clean_tables():
-    """各テストの前にテーブルを空にする (スキーマは保持)。
+    """各テストの前にテーブルを空にし、auth のプロセス状態を既定に戻す。
 
     ``users`` も空にするが、特権ユーザー ``admin`` は init_db と同じく必ず
-    シードし直す (ブートストラップを保つ)。
+    シードし直す (ブートストラップを保つ)。auth はプロセスグローバルな状態
+    (トランスポート種別 / stdio ユーザー / client_id マップ) を持つので、
+    テスト間でリークしないよう既定 (stdio・未設定) に戻す。
     """
+    _auth_mod.set_http_transport(False)
+    _auth_mod.set_stdio_user(None)
+    _auth_mod._http_user_by_client.clear()
     with _db_mod._connect_db() as db:
         db.execute("DELETE FROM memos")
         db.execute("DELETE FROM memo_embeddings")

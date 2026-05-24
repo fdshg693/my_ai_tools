@@ -10,9 +10,11 @@ stdio と同じく `set_stdio_user()` で固定する。
 
 import asyncio
 import json
+import logging
 
 from fastmcp import Client
 
+from memo import auth as auth_module
 from memo import service
 from memo.auth import set_stdio_user
 from memo.database import ADMIN_USER
@@ -34,7 +36,27 @@ EXPECTED_TOOLS = {
     "list_users",
     "update_user",
     "delete_user",
+    "switch_user",
 }
+
+
+class _DummyRequest:
+    """HTTP リクエストコンテキストを擬似する (query_params / headers のみ)。"""
+
+    def __init__(self, query: dict, headers: dict | None = None):
+        self.query_params = query  # dict は .get() を持つので Starlette QueryParams 代用可
+        self.headers = headers or {}
+
+
+def _patch_http(monkeypatch, query: dict, headers: dict | None = None) -> None:
+    """auth.current_user 等が HTTP モードで振る舞うようにする。
+
+    起動時に確定するトランスポート種別を HTTP に立て、get_http_request を
+    ダミーリクエストへ差し替える (どちらも conftest が各テスト後に既定へ戻す)。
+    """
+    auth_module.set_http_transport(True)
+    req = _DummyRequest(query, headers)
+    monkeypatch.setattr(auth_module, "get_http_request", lambda: req)
 
 
 async def _list_tool_names() -> set[str]:
@@ -167,6 +189,87 @@ def test_semantic_search_reports_embedding_error(monkeypatch):
     finally:
         set_stdio_user(None)
     assert result.startswith("Error:")
+
+
+def test_switch_user_stdio_changes_owner():
+    create_user_db("alice")
+    set_stdio_user(ADMIN_USER)
+    try:
+        switched = asyncio.run(_call("switch_user", {"target": "alice"}))
+        assert switched == "Switched user to 'alice'."
+        # switch_user が _stdio_user を alice に書き換えたので、以後のメモは alice 所有
+        created = asyncio.run(_call("create_memo", {"title": "alice の切替メモ"}))
+        assert created.startswith("Created memo id=")
+        # alice (非 admin) の list_memos は自分のメモだけ見える → 所有者が alice の証跡
+        listed = asyncio.run(_call("list_memos", {}))
+        assert "alice の切替メモ" in listed
+    finally:
+        set_stdio_user(None)
+
+
+def test_switch_user_rejects_unregistered_target():
+    set_stdio_user(ADMIN_USER)
+    try:
+        result = asyncio.run(_call("switch_user", {"target": "ghost"}))
+    finally:
+        set_stdio_user(None)
+    assert "is not registered" in result
+
+
+def test_switch_user_rejects_unidentified_caller():
+    set_stdio_user(None)
+    result = asyncio.run(_call("switch_user", {"target": "alice"}))
+    assert result.startswith("Error: user is not identified")
+
+
+def test_http_client_id_registers_initial_user(monkeypatch):
+    _patch_http(monkeypatch, {"user": "alice", "client_id": "c1"})
+    assert auth_module.current_user() == "alice"
+    assert auth_module._http_user_by_client["c1"] == "alice"
+
+
+def test_http_setdefault_keeps_first_user(monkeypatch):
+    _patch_http(monkeypatch, {"user": "alice", "client_id": "c1"})
+    auth_module.current_user()
+    # 同じ client_id で別の ?user= が来ても setdefault で初回値を保持する
+    _patch_http(monkeypatch, {"user": "bob", "client_id": "c1"})
+    assert auth_module.current_user() == "alice"
+
+
+def test_http_switch_then_current_user(monkeypatch):
+    _patch_http(monkeypatch, {"user": "alice", "client_id": "c1"})
+    auth_module.current_user()
+    auth_module.switch_http_user("c1", "bob")
+    assert auth_module.current_user() == "bob"
+
+
+def test_http_no_client_id_is_backward_compatible(monkeypatch):
+    _patch_http(monkeypatch, {"user": "alice"})  # client_id 無し → 従来通り ?user=
+    assert auth_module.current_user() == "alice"
+    assert auth_module._http_user_by_client == {}
+
+
+def test_audit_log_emits_info_line_per_tool_call(caplog):
+    create_user_db("logwatcher")
+    set_stdio_user("logwatcher")
+    try:
+        with caplog.at_level(logging.INFO, logger="memo.logging_middleware"):
+            asyncio.run(_call("create_memo", {"title": "ログ確認"}))
+    finally:
+        set_stdio_user(None)
+    msgs = [r.getMessage() for r in caplog.records if r.name == "memo.logging_middleware"]
+    assert any("tool=create_memo" in m and "user=logwatcher" in m for m in msgs)
+
+
+def test_audit_log_debug_includes_initialize(caplog):
+    set_stdio_user(ADMIN_USER)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="memo.logging_middleware"):
+            asyncio.run(_list_tool_names())  # 接続時に initialize が走る
+    finally:
+        set_stdio_user(None)
+    msgs = [r.getMessage() for r in caplog.records if r.name == "memo.logging_middleware"]
+    assert any("method=initialize" in m for m in msgs)
 
 
 async def _main():
