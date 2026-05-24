@@ -54,7 +54,7 @@ Windows では文字化け対策として `justfile` 内で Git Bash (`C:/Progra
 
 ### Dockerfile のポイント
 
-- ビルドコンテキスト: リポジトリルート (`fastmcp_mcps/`)。`-f` でこの Dockerfile を指定する
+- ビルドコンテキスト: リポジトリルート (`my_ai_tools/`)。`-f` でこの Dockerfile を指定する
 - 依存インストールとコードコピーを分離してキャッシュ効率化
 - デフォルト環境変数: `TRANSPORT=http`, `HOST=0.0.0.0`, `PORT=8080`, `DB_PATH=/data/vocab.db`
 - YAML 設定の取得先 (Cloud Run): `PROMPTS_URI=gs://${project_id}-dp-data/prompts`, TTL `CONFIG_TTL_SECONDS=60`。YAML は `just upload-prompts` で GCS に同期し、変更を即時反映するには MCP ツール `reload_config` を呼ぶ

@@ -5,7 +5,8 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "dynamic-prompt",
-    "fastmcp-mcps",
+    "memo",
+    "my-ai-tools",
 ]
 
 [[package]]
@@ -398,17 +399,6 @@ apps = [
 ]
 
 [[package]]
-name = "fastmcp-mcps"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "dynamic-prompt" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "dynamic-prompt", editable = "mcps/dynamic_prompt" }]
-
-[[package]]
 name = "google-api-core"
 version = "2.30.3"
 source = { registry = "https://pypi.org/simple" }
@@ -742,12 +732,46 @@ wheels = [
 ]
 
 [[package]]
+name = "memo"
+version = "0.1.0"
+source = { editable = "mcps/memo" }
+dependencies = [
+    { name = "fastmcp" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "fastmcp", specifier = ">=3.1.0" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
+
+[[package]]
 name = "more-itertools"
 version = "10.8.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ea/5d/38b681d3fce7a266dd9ab73c66959406d565b3e85f21d5e66e1181d93721/more_itertools-10.8.0.tar.gz", hash = "sha256:f638ddf8a1a0d134181275fb5d58b086ead7c6a72429ad725c67503f13ba30bd", size = 137431, upload-time = "2025-09-02T15:23:11.018Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/8e/469e5a4a2f5855992e425f3cb33804cc07bf18d48f2db061aec61ce50270/more_itertools-10.8.0-py3-none-any.whl", hash = "sha256:52d4362373dcf7c52546bc4af9a86ee7c4579df9a8dc268be0a2f949d376cc9b", size = 69667, upload-time = "2025-09-02T15:23:09.635Z" },
+]
+
+[[package]]
+name = "my-ai-tools"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "dynamic-prompt" },
+    { name = "memo" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dynamic-prompt", editable = "mcps/dynamic_prompt" },
+    { name = "memo", editable = "mcps/memo" },
 ]
 
 [[package]]

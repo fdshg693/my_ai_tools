@@ -1,16 +1,21 @@
 [project]
-name = "fastmcp_mcps"
+name = "my_ai_tools"
 version = "0.1.0"
 description = "FastMCPで作成したMCPサーバーのまとめ"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "dynamic_prompt"
+    "dynamic_prompt",
+    "memo"
 ]
 
 [tool.uv.workspace]
-members = ["mcps/dynamic_prompt"]
+members = ["mcps/dynamic_prompt", "mcps/memo"]
 
 [tool.uv.sources]
 # ワークスペースから解決することを明示
-dynamic_prompt = { workspace = true }  
+dynamic_prompt = { workspace = true }
+memo = { workspace = true }
+
+[tool.ruff]
+extend-exclude = ["*.md"]

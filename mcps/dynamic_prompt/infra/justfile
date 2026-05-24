@@ -15,7 +15,7 @@ image_repo := region + "-docker.pkg.dev/" + project_id + "/dynamic-prompt/server
 image_tag  := "latest"
 image      := image_repo + ":" + image_tag
 container  := "dp-test"
-repo_root  := `git rev-parse --show-toplevel` + "/src/fastmcp_mcps"
+repo_root  := `git rev-parse --show-toplevel` + "/src/my_ai_tools"
 # Windows の justfile_directory() はバックスラッシュ区切りで返るため、bash が解釈する際にエスケープとして消える。
 # forward slash に変換してから他のパスを組み立てる。
 infra_dir  := replace(justfile_directory(), "\\", "/")

@@ -7,6 +7,14 @@
                 "run",
                 "mcps\\dynamic_prompt\\src\\dynamic_prompt\\main.py"
             ]
+        },
+        "memo": {
+            "type": "stdio",
+            "command": "uv",
+            "args": [
+                "run",
+                "mcps\\memo\\src\\memo\\main.py"
+            ]
         }
     },
     "inputs": []
