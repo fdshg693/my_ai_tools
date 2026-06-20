@@ -96,6 +96,12 @@ td input { width: 100%; padding: 6px 8px; font-size: 0.9rem; }
 
 .empty { color: var(--text-secondary); padding: 16px 8px; font-size: 0.9rem; }
 
+.id-col { width: 1%; white-space: nowrap; }
+td.summary { color: var(--text-secondary); }
+
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
+.pager .muted { color: var(--text-secondary); font-size: 0.85rem; }
+
 .toast {
   position: fixed;
   bottom: 24px;

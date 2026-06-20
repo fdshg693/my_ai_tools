@@ -56,10 +56,13 @@ function renderRow(user) {
     <td><input class="edit-note" value="${escapeHtml(user.note)}" placeholder="(なし)" /></td>
     <td class="muted">${escapeHtml(user.created_at)}</td>
     <td class="actions">
+      <button type="button" class="link memo-btn">メモ</button>
       <button type="button" class="link save-btn">保存</button>
       ${isAdmin ? "" : '<button type="button" class="link danger delete-btn">削除</button>'}
     </td>
   `;
+
+  tr.querySelector(".memo-btn").addEventListener("click", () => openMemos(user.name));
 
   tr.querySelector(".save-btn").addEventListener("click", async () => {
     const display_name = tr.querySelector(".edit-display").value;
@@ -101,6 +104,76 @@ async function loadUsers() {
     showToast(e.message, true);
   }
 }
+
+// --- メモ一覧 (ユーザーごと・ページング) ------------------------------------
+
+const PER_PAGE = 20;
+
+const memoCard = document.getElementById("memo-card");
+const memoUserEl = document.getElementById("memo-user");
+const memoRowsEl = document.getElementById("memo-rows");
+const memoEmptyEl = document.getElementById("memo-empty");
+const memoPagerEl = document.getElementById("memo-pager");
+const memoPageInfoEl = document.getElementById("memo-pageinfo");
+const memoPrevBtn = document.getElementById("memo-prev");
+const memoNextBtn = document.getElementById("memo-next");
+
+// 現在表示中のメモ一覧の状態 (どのユーザーの何ページ目か)。
+const memoView = { user: null, page: 1, totalPages: 0 };
+
+function renderMemoRow(memo) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td class="muted">${memo.id}</td>
+    <td>${escapeHtml(memo.title)}</td>
+    <td class="summary">${escapeHtml(memo.summary)}</td>
+    <td class="muted">${escapeHtml(memo.updated_at)}</td>
+  `;
+  return tr;
+}
+
+async function loadMemos(name, page) {
+  try {
+    const data = await api(
+      `/api/users/${encodeURIComponent(name)}/memos?page=${page}&per_page=${PER_PAGE}`
+    );
+    memoView.user = name;
+    memoView.page = data.page;
+    memoView.totalPages = data.total_pages;
+
+    memoUserEl.textContent = name;
+    memoRowsEl.replaceChildren(...data.items.map(renderMemoRow));
+    memoEmptyEl.hidden = data.total > 0;
+
+    const hasPages = data.total_pages > 0;
+    memoPagerEl.hidden = !hasPages;
+    memoPageInfoEl.textContent = hasPages
+      ? `${data.page} / ${data.total_pages} ページ (全 ${data.total} 件)`
+      : "";
+    memoPrevBtn.disabled = data.page <= 1;
+    memoNextBtn.disabled = data.page >= data.total_pages;
+
+    memoCard.hidden = false;
+    memoCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    showToast(e.message, true);
+  }
+}
+
+function openMemos(name) {
+  loadMemos(name, 1);
+}
+
+memoPrevBtn.addEventListener("click", () => {
+  if (memoView.page > 1) loadMemos(memoView.user, memoView.page - 1);
+});
+memoNextBtn.addEventListener("click", () => {
+  if (memoView.page < memoView.totalPages) loadMemos(memoView.user, memoView.page + 1);
+});
+document.getElementById("memo-close").addEventListener("click", () => {
+  memoCard.hidden = true;
+  memoView.user = null;
+});
 
 document.getElementById("create-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();

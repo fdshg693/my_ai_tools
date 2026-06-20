@@ -23,6 +23,7 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from memo.repository.memo import count_memos_db, list_memos_db
 from memo.service.user import (
     CannotDeleteAdmin,
     NameRequired,
@@ -38,6 +39,20 @@ from memo.service.user import (
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# メモ一覧のページング既定値 (1ページあたりの件数とその上限)。
+DEFAULT_PER_PAGE = 20
+MAX_PER_PAGE = 100
+
+
+def _int_param(request: Request, name: str, default: int, *, minimum: int) -> int:
+    """クエリ文字列から整数を読む。未指定・不正値は ``default`` にフォールバック。"""
+    raw = request.query_params.get(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +78,38 @@ async def api_get_user(request: Request) -> JSONResponse:
     except UserNotFound:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
     return JSONResponse(user)
+
+
+async def api_list_user_memos(request: Request) -> JSONResponse:
+    """指定ユーザーのメモを新しい順にページングして返す (一覧表示専用)。
+
+    クエリ: ``page`` (1始まり) / ``per_page`` (1〜``MAX_PER_PAGE``)。
+    ユーザーが台帳に存在しなければ 404。メモは多くなり得るので、件数 (``total``)
+    と総ページ数 (``total_pages``) を添えて返す。
+    """
+    name = request.path_params["name"]
+    try:
+        get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
+
+    page = _int_param(request, "page", 1, minimum=1)
+    per_page = min(_int_param(request, "per_page", DEFAULT_PER_PAGE, minimum=1), MAX_PER_PAGE)
+
+    # この画面は「特定ユーザーのメモ」を見るので is_admin は使わず user で絞る。
+    total = count_memos_db(name)
+    memos = list_memos_db(name, limit=per_page, offset=(page - 1) * per_page)
+    total_pages = (total + per_page - 1) // per_page if total else 0
+    return JSONResponse(
+        {
+            "user": name,
+            "items": memos,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        }
+    )
 
 
 async def api_create_user(request: Request) -> JSONResponse:
@@ -128,6 +175,7 @@ def create_app() -> Starlette:
             Route("/", index),
             Route("/api/users", api_list_users, methods=["GET"]),
             Route("/api/users", api_create_user, methods=["POST"]),
+            Route("/api/users/{name}/memos", api_list_user_memos, methods=["GET"]),
             Route("/api/users/{name}", api_get_user, methods=["GET"]),
             Route("/api/users/{name}", api_update_user, methods=["PUT"]),
             Route("/api/users/{name}", api_delete_user, methods=["DELETE"]),

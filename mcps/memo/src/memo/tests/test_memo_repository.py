@@ -2,6 +2,7 @@
 
 from memo.infra.database import ADMIN_USER
 from memo.repository.memo import (
+    count_memos_db,
     create_memo_db,
     delete_memo_db,
     get_memo_db,
@@ -50,6 +51,33 @@ def test_list_limit():
     for i in range(5):
         create_memo_db(ALICE, f"memo-{i}")
     assert len(list_memos_db(ALICE, limit=3)) == 3
+
+
+def test_list_offset_paginates():
+    created = [create_memo_db(ALICE, f"memo-{i}") for i in range(5)]
+    # 新しい順 (id 降順) なので末尾が先頭
+    newest_first = [m["id"] for m in reversed(created)]
+    page1 = [m["id"] for m in list_memos_db(ALICE, limit=2, offset=0)]
+    page2 = [m["id"] for m in list_memos_db(ALICE, limit=2, offset=2)]
+    page3 = [m["id"] for m in list_memos_db(ALICE, limit=2, offset=4)]
+    assert page1 == newest_first[0:2]
+    assert page2 == newest_first[2:4]
+    assert page3 == newest_first[4:5]  # 最終ページは1件
+
+
+def test_count_only_own_memos():
+    create_memo_db(ALICE, "alice-1")
+    create_memo_db(ALICE, "alice-2")
+    create_memo_db(BOB, "bob-1")
+    assert count_memos_db(ALICE) == 2
+    assert count_memos_db(BOB) == 1
+
+
+def test_count_admin_counts_all():
+    create_memo_db(ALICE, "alice-1")
+    create_memo_db(BOB, "bob-1")
+    create_memo_db("", "orphan-1")
+    assert count_memos_db(ADMIN_USER, is_admin=True) == 3
 
 
 def test_search_partial_title_match():

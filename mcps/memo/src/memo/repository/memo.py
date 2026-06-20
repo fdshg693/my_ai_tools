@@ -62,19 +62,36 @@ def get_memo_db(user: str, memo_id: int, is_admin: bool = False) -> dict | None:
     return _row_to_dict(row) if row else None
 
 
-def list_memos_db(user: str, limit: int = 50, is_admin: bool = False) -> list[dict]:
+def list_memos_db(
+    user: str, limit: int = 50, is_admin: bool = False, offset: int = 0
+) -> list[dict]:
     """メモを新しい順 (更新日時の降順) に取得する。
 
     通常は ``user`` のメモのみ。``is_admin=True`` なら全ユーザーのメモを返す。
+    ``offset`` で先頭から読み飛ばす件数を指定でき、``limit`` と組み合わせて
+    ページングに使える。
     """
     where = "" if is_admin else "WHERE user = ?"
     params = [] if is_admin else [user]
     with _connect_db() as db:
         rows = db.execute(
-            f"SELECT * FROM memos {where} ORDER BY updated_at DESC, id DESC LIMIT ?",
-            [*params, limit],
+            f"SELECT * FROM memos {where} "
+            "ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def count_memos_db(user: str, is_admin: bool = False) -> int:
+    """メモの総件数を返す (ページング用)。
+
+    通常は ``user`` のメモのみ数える。``is_admin=True`` なら全ユーザー分。
+    """
+    where = "" if is_admin else "WHERE user = ?"
+    params = [] if is_admin else [user]
+    with _connect_db() as db:
+        row = db.execute(f"SELECT COUNT(*) AS n FROM memos {where}", params).fetchone()
+    return row["n"]
 
 
 def _escape_like(keyword: str) -> str:

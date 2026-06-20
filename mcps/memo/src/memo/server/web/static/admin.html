@@ -33,7 +33,7 @@
           <tr>
             <th>ユーザー名</th>
             <th>表示名</th>
-            <th>メモ</th>
+            <th>備考</th>
             <th>作成日時</th>
             <th class="actions-col">操作</th>
           </tr>
@@ -41,6 +41,30 @@
         <tbody id="user-rows"></tbody>
       </table>
       <p id="empty" class="empty" hidden>ユーザーがいません。</p>
+    </section>
+
+    <section id="memo-card" class="card" hidden>
+      <div class="card-head">
+        <h2>「<span id="memo-user"></span>」のメモ一覧</h2>
+        <button id="memo-close" type="button" class="ghost">閉じる</button>
+      </div>
+      <table id="memo-table">
+        <thead>
+          <tr>
+            <th class="id-col">ID</th>
+            <th>タイトル</th>
+            <th>概要</th>
+            <th>更新日時</th>
+          </tr>
+        </thead>
+        <tbody id="memo-rows"></tbody>
+      </table>
+      <p id="memo-empty" class="empty" hidden>メモがありません。</p>
+      <div id="memo-pager" class="pager" hidden>
+        <button id="memo-prev" type="button" class="ghost">前へ</button>
+        <span id="memo-pageinfo" class="muted"></span>
+        <button id="memo-next" type="button" class="ghost">次へ</button>
+      </div>
     </section>
   </div>
 
