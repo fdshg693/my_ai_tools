@@ -121,14 +121,36 @@ const memoNextBtn = document.getElementById("memo-next");
 // 現在表示中のメモ一覧の状態 (どのユーザーの何ページ目か)。
 const memoView = { user: null, page: 1, totalPages: 0 };
 
-function renderMemoRow(memo) {
+function renderMemoRow(memo, user) {
   const tr = document.createElement("tr");
+  tr.dataset.id = memo.id;
   tr.innerHTML = `
     <td class="muted">${memo.id}</td>
     <td>${escapeHtml(memo.title)}</td>
     <td class="summary">${escapeHtml(memo.summary)}</td>
     <td class="muted">${escapeHtml(memo.updated_at)}</td>
+    <td class="actions">
+      <button type="button" class="link edit-btn">編集</button>
+      <button type="button" class="link danger delete-btn">削除</button>
+    </td>
   `;
+
+  // 編集はインラインでなく編集画面へ遷移する。
+  tr.querySelector(".edit-btn").addEventListener("click", () => openMemoEditor(user, memo));
+
+  tr.querySelector(".delete-btn").addEventListener("click", async () => {
+    if (!confirm(`メモ #${memo.id}「${memo.title}」を削除しますか？`)) return;
+    try {
+      await api(`/api/users/${encodeURIComponent(user)}/memos/${memo.id}`, {
+        method: "DELETE",
+      });
+      showToast(`メモ #${memo.id} を削除しました`);
+      loadMemos(user, memoView.page);
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  });
+
   return tr;
 }
 
@@ -142,7 +164,7 @@ async function loadMemos(name, page) {
     memoView.totalPages = data.total_pages;
 
     memoUserEl.textContent = name;
-    memoRowsEl.replaceChildren(...data.items.map(renderMemoRow));
+    memoRowsEl.replaceChildren(...data.items.map((m) => renderMemoRow(m, name)));
     memoEmptyEl.hidden = data.total > 0;
 
     const hasPages = data.total_pages > 0;
@@ -153,6 +175,7 @@ async function loadMemos(name, page) {
     memoPrevBtn.disabled = data.page <= 1;
     memoNextBtn.disabled = data.page >= data.total_pages;
 
+    memoEditCard.hidden = true; // 一覧を表示するときは編集画面を畳む
     memoCard.hidden = false;
     memoCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (e) {
@@ -173,6 +196,78 @@ memoNextBtn.addEventListener("click", () => {
 document.getElementById("memo-close").addEventListener("click", () => {
   memoCard.hidden = true;
   memoView.user = null;
+});
+
+// --- メモ編集画面 (新規作成 / 編集を 1 画面で兼ねる) -------------------------
+
+const memoEditCard = document.getElementById("memo-edit-card");
+const memoEditHeadingEl = document.getElementById("memo-edit-heading");
+const memoEditForm = document.getElementById("memo-edit-form");
+const editTitleEl = document.getElementById("edit-memo-title");
+const editSummaryEl = document.getElementById("edit-memo-summary");
+
+// 編集対象の状態。id が null なら新規作成、数値なら既存メモの更新。
+const memoEdit = { user: null, id: null };
+
+// memo を渡すと編集モード、省略すると新規作成モードで編集画面に遷移する。
+function openMemoEditor(user, memo = null) {
+  memoEdit.user = user;
+  memoEdit.id = memo ? memo.id : null;
+  memoEditHeadingEl.textContent = memo
+    ? `「${user}」のメモを編集 (#${memo.id})`
+    : `「${user}」に新しいメモを追加`;
+  editTitleEl.value = memo ? memo.title : "";
+  editSummaryEl.value = memo ? memo.summary : "";
+
+  memoCard.hidden = true;
+  memoEditCard.hidden = false;
+  memoEditCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  editTitleEl.focus();
+}
+
+// 編集画面を閉じて一覧に戻る (保存はしない)。reload=true なら一覧を取り直す。
+function closeMemoEditor(reload = false, page = memoView.page) {
+  memoEditCard.hidden = true;
+  if (reload) {
+    loadMemos(memoEdit.user, page);
+  } else {
+    memoCard.hidden = false;
+    memoCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+  memoEdit.user = null;
+  memoEdit.id = null;
+}
+
+document.getElementById("memo-new").addEventListener("click", () => {
+  if (memoView.user) openMemoEditor(memoView.user);
+});
+document.getElementById("memo-edit-back").addEventListener("click", () => closeMemoEditor());
+document.getElementById("memo-edit-cancel").addEventListener("click", () => closeMemoEditor());
+
+memoEditForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!memoEdit.user) return;
+  const title = editTitleEl.value.trim();
+  const summary = editSummaryEl.value;
+  if (!title) {
+    showToast("タイトルは必須です", true);
+    return;
+  }
+  const isNew = memoEdit.id === null;
+  const path = isNew
+    ? `/api/users/${encodeURIComponent(memoEdit.user)}/memos`
+    : `/api/users/${encodeURIComponent(memoEdit.user)}/memos/${memoEdit.id}`;
+  try {
+    await api(path, {
+      method: isNew ? "POST" : "PUT",
+      body: JSON.stringify({ title, summary }),
+    });
+    showToast(isNew ? "メモを追加しました" : `メモ #${memoEdit.id} を更新しました`);
+    // 新規は更新日時が最新 → 1ページ目の先頭。編集は元のページに戻る。
+    closeMemoEditor(true, isNew ? 1 : memoView.page);
+  } catch (e) {
+    showToast(e.message, true);
+  }
 });
 
 document.getElementById("create-form").addEventListener("submit", async (ev) => {

@@ -177,3 +177,122 @@ def test_list_user_memos_invalid_params_fallback(client):
     body = client.get("/api/users/leo/memos?page=abc&per_page=xyz").json()
     assert body["page"] == 1
     assert body["per_page"] == 20  # DEFAULT_PER_PAGE
+
+
+# ---------------------------------------------------------------------------
+# ユーザーごとのメモ CRUD (作成 / 更新 / 削除)
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_memo(client):
+    client.post("/api/users", json={"name": "mona"})
+    res = client.post(
+        "/api/users/mona/memos", json={"title": "T", "summary": "S"}
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert body["title"] == "T"
+    assert body["summary"] == "S"
+    assert body["user"] == "mona"  # 所有者はパスのユーザーに固定
+
+    # 一覧に反映される
+    listing = client.get("/api/users/mona/memos").json()
+    assert listing["total"] == 1
+
+
+def test_create_user_memo_trims_and_defaults_summary(client):
+    client.post("/api/users", json={"name": "nina"})
+    res = client.post("/api/users/nina/memos", json={"title": "  hi  "})
+    assert res.status_code == 201
+    body = res.json()
+    assert body["title"] == "hi"  # trim される
+    assert body["summary"] == ""  # 省略時は空
+
+
+def test_create_user_memo_requires_title(client):
+    client.post("/api/users", json={"name": "omar"})
+    res = client.post("/api/users/omar/memos", json={"title": "   "})
+    assert res.status_code == 400
+
+
+def test_create_user_memo_missing_user_404(client):
+    res = client.post("/api/users/ghost/memos", json={"title": "x"})
+    assert res.status_code == 404
+
+
+def test_update_user_memo(client):
+    client.post("/api/users", json={"name": "pam"})
+    memo = create_memo_db("pam", "old", "old-summary")
+    res = client.put(
+        f"/api/users/pam/memos/{memo['id']}",
+        json={"title": "new", "summary": "new-summary"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["title"] == "new"
+    assert body["summary"] == "new-summary"
+
+
+def test_update_user_memo_partial(client):
+    client.post("/api/users", json={"name": "quinn"})
+    memo = create_memo_db("quinn", "keep", "keep-summary")
+    # summary だけ更新。title 省略 → 変更しない
+    res = client.put(
+        f"/api/users/quinn/memos/{memo['id']}", json={"summary": "changed"}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["title"] == "keep"
+    assert body["summary"] == "changed"
+
+
+def test_update_user_memo_rejects_empty_title(client):
+    client.post("/api/users", json={"name": "rita"})
+    memo = create_memo_db("rita", "title")
+    res = client.put(f"/api/users/rita/memos/{memo['id']}", json={"title": "  "})
+    assert res.status_code == 400
+
+
+def test_update_user_memo_other_user_404(client):
+    client.post("/api/users", json={"name": "sam"})
+    client.post("/api/users", json={"name": "tina"})
+    memo = create_memo_db("tina", "tina-memo")
+    # sam のパスで tina のメモを更新しようとしても見つからない (完全分離)
+    res = client.put(
+        f"/api/users/sam/memos/{memo['id']}", json={"title": "hack"}
+    )
+    assert res.status_code == 404
+    # tina のメモは変わっていない
+    body = client.get("/api/users/tina/memos").json()
+    assert body["items"][0]["title"] == "tina-memo"
+
+
+def test_update_user_memo_missing_404(client):
+    client.post("/api/users", json={"name": "uma"})
+    res = client.put("/api/users/uma/memos/99999", json={"title": "x"})
+    assert res.status_code == 404
+
+
+def test_delete_user_memo(client):
+    client.post("/api/users", json={"name": "vic"})
+    memo = create_memo_db("vic", "to-delete")
+    res = client.delete(f"/api/users/vic/memos/{memo['id']}")
+    assert res.status_code == 200
+    assert res.json()["deleted"] == memo["id"]
+    assert client.get("/api/users/vic/memos").json()["total"] == 0
+
+
+def test_delete_user_memo_other_user_404(client):
+    client.post("/api/users", json={"name": "wes"})
+    client.post("/api/users", json={"name": "xena"})
+    memo = create_memo_db("xena", "xena-memo")
+    res = client.delete(f"/api/users/wes/memos/{memo['id']}")
+    assert res.status_code == 404
+    # xena のメモは残っている
+    assert client.get("/api/users/xena/memos").json()["total"] == 1
+
+
+def test_delete_user_memo_missing_404(client):
+    client.post("/api/users", json={"name": "yan"})
+    res = client.delete("/api/users/yan/memos/99999")
+    assert res.status_code == 404

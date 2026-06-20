@@ -23,7 +23,13 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memo.repository.memo import count_memos_db, list_memos_db
+from memo.repository.memo import (
+    count_memos_db,
+    create_memo_db,
+    delete_memo_db,
+    list_memos_db,
+    update_memo_db,
+)
 from memo.service.user import (
     CannotDeleteAdmin,
     NameRequired,
@@ -112,6 +118,66 @@ async def api_list_user_memos(request: Request) -> JSONResponse:
     )
 
 
+async def api_create_user_memo(request: Request) -> JSONResponse:
+    """指定ユーザーのメモを新規作成する。title 必須・ユーザーが無ければ 404。
+
+    所有者はパスの ``name`` に固定する (この画面は「特定ユーザーのメモ」を扱うので
+    is_admin は使わず、常にそのユーザーのメモとして作る)。
+    """
+    name = request.path_params["name"]
+    try:
+        get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
+
+    body = await request.json()
+    title = str(body.get("title", "")).strip()
+    if not title:
+        return JSONResponse({"error": "title is required"}, status_code=400)
+    summary = str(body.get("summary", "")).strip()
+    memo = create_memo_db(name, title, summary)
+    return JSONResponse(memo, status_code=201)
+
+
+async def api_update_user_memo(request: Request) -> JSONResponse:
+    """指定ユーザーのメモを更新する (title / summary の部分更新)。
+
+    対象はそのユーザーが所有するメモに限る (is_admin=False で絞る)。存在しない/
+    他人のメモなら 404。空の title への更新は拒否する (400)。
+    """
+    name = request.path_params["name"]
+    memo_id = request.path_params["memo_id"]
+
+    body = await request.json()
+    title = body.get("title")
+    if isinstance(title, str):
+        title = title.strip()
+        if not title:
+            return JSONResponse({"error": "title is required"}, status_code=400)
+    else:
+        title = None  # 省略 → 変更しない
+    summary = body.get("summary")
+    summary = summary.strip() if isinstance(summary, str) else None
+
+    memo = update_memo_db(name, memo_id, title, summary)
+    if memo is None:
+        return JSONResponse(
+            {"error": f"memo id={memo_id} not found"}, status_code=404
+        )
+    return JSONResponse(memo)
+
+
+async def api_delete_user_memo(request: Request) -> JSONResponse:
+    """指定ユーザーのメモを削除する。そのユーザーが所有するメモのみ (無ければ 404)。"""
+    name = request.path_params["name"]
+    memo_id = request.path_params["memo_id"]
+    if not delete_memo_db(name, memo_id):
+        return JSONResponse(
+            {"error": f"memo id={memo_id} not found"}, status_code=404
+        )
+    return JSONResponse({"deleted": memo_id})
+
+
 async def api_create_user(request: Request) -> JSONResponse:
     """ユーザーを新規登録する。name 必須・重複は 409。"""
     body = await request.json()
@@ -176,6 +242,17 @@ def create_app() -> Starlette:
             Route("/api/users", api_list_users, methods=["GET"]),
             Route("/api/users", api_create_user, methods=["POST"]),
             Route("/api/users/{name}/memos", api_list_user_memos, methods=["GET"]),
+            Route("/api/users/{name}/memos", api_create_user_memo, methods=["POST"]),
+            Route(
+                "/api/users/{name}/memos/{memo_id:int}",
+                api_update_user_memo,
+                methods=["PUT"],
+            ),
+            Route(
+                "/api/users/{name}/memos/{memo_id:int}",
+                api_delete_user_memo,
+                methods=["DELETE"],
+            ),
             Route("/api/users/{name}", api_get_user, methods=["GET"]),
             Route("/api/users/{name}", api_update_user, methods=["PUT"]),
             Route("/api/users/{name}", api_delete_user, methods=["DELETE"]),
