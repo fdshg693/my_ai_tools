@@ -99,6 +99,30 @@ def test_crud_roundtrip():
     assert "matched_keywords" in searched
 
 
+def test_category_filter_roundtrip():
+    create_user_db("catuser")
+    set_stdio_user("catuser")
+    try:
+        created = asyncio.run(
+            _call("create_memo", {"title": "仕事メモ", "category": "work"})
+        )
+        asyncio.run(_call("create_memo", {"title": "私用メモ", "category": "private"}))
+        # 作成メッセージに正規化後のカテゴリが出る
+        assert "category=WORK" in created
+        # list は同一カテゴリだけに絞れる (大文字小文字は区別しない)
+        listed = asyncio.run(_call("list_memos", {"category": "work"}))
+        assert "仕事メモ" in listed
+        assert "私用メモ" not in listed
+        # search も同様に絞れる
+        searched = asyncio.run(
+            _call("search_memos", {"query": "メモ", "category": "private"})
+        )
+        assert "私用メモ" in searched
+        assert "仕事メモ" not in searched
+    finally:
+        set_stdio_user(None)
+
+
 def test_rejects_when_user_not_identified():
     set_stdio_user(None)
     result = asyncio.run(_call("create_memo", {"title": "誰のもの?"}))
@@ -196,7 +220,9 @@ def test_switch_user_stdio_changes_owner():
     set_stdio_user(ADMIN_USER)
     try:
         switched = asyncio.run(_call("switch_user", {"target": "alice"}))
-        assert switched == "Switched user to 'alice'."
+        # メモがまだ無いユーザーは「カテゴリを持つメモはまだありません」を添える
+        assert switched.startswith("Switched user to 'alice'.")
+        assert "まだありません" in switched
         # switch_user が _stdio_user を alice に書き換えたので、以後のメモは alice 所有
         created = asyncio.run(_call("create_memo", {"title": "alice の切替メモ"}))
         assert created.startswith("Created memo id=")
@@ -205,6 +231,22 @@ def test_switch_user_stdio_changes_owner():
         assert "alice の切替メモ" in listed
     finally:
         set_stdio_user(None)
+
+
+def test_switch_user_returns_target_categories():
+    create_user_db("alice")
+    # 切り替え先 alice のメモが持つカテゴリが切り替え結果に含まれる
+    create_memo_db("alice", "仕事", "", category="work")
+    create_memo_db("alice", "私用", "", category="private")
+    set_stdio_user(ADMIN_USER)
+    try:
+        switched = asyncio.run(_call("switch_user", {"target": "alice"}))
+    finally:
+        set_stdio_user(None)
+    assert "メモのカテゴリ:" in switched
+    # 正規化済み (大文字)・名前順で列挙される
+    assert "PRIVATE" in switched
+    assert "WORK" in switched
 
 
 def test_switch_user_rejects_unregistered_target():

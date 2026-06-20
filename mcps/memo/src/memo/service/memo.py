@@ -45,17 +45,24 @@ def _embedding_for_memo(memo: dict) -> list[float]:
 
 
 def semantic_search(
-    user: str, query: str, limit: int = 5, is_admin: bool = False
+    user: str,
+    query: str,
+    limit: int = 5,
+    is_admin: bool = False,
+    category: str | None = None,
 ) -> list[dict]:
     """概要 (summary) の意味的な近さでメモを検索し、類似度の高い順に返す。
 
     通常は ``user`` のメモのみ、``is_admin=True`` なら全ユーザーのメモが対象
-    (user 絞り込み・admin 挙動は ``list_memos_db`` に集約)。概要が空のメモは
+    (user 絞り込み・admin 挙動は ``list_memos_db`` に集約)。``category`` を渡すと
+    同一カテゴリのメモだけを対象にする (``None`` は全カテゴリ)。概要が空のメモは
     対象外。各メモには query との ``similarity`` (0〜1) を付与する。
     埋め込み API の失敗は ``EmbeddingError`` がそのまま伝播する。
     """
     query_vec = embed_text(query)
-    candidates = list_memos_db(user, limit=_CANDIDATE_CAP, is_admin=is_admin)
+    candidates = list_memos_db(
+        user, limit=_CANDIDATE_CAP, is_admin=is_admin, category=category
+    )
 
     scored: list[dict] = []
     for memo in candidates:

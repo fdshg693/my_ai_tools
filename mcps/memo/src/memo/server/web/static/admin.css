@@ -120,6 +120,21 @@ td input { width: 100%; padding: 6px 8px; font-size: 0.9rem; }
 .id-col { width: 1%; white-space: nowrap; }
 td.summary { color: var(--text-secondary); }
 
+/* メモのカテゴリ表示 (一覧のバッジ) と絞り込み欄 */
+.cat-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  border-radius: 6px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.memo-filter { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.memo-filter label { font-size: 0.85rem; color: var(--text-secondary); font-weight: 600; }
+.memo-filter input { flex: 0 1 200px; padding: 6px 10px; font-size: 0.9rem; }
+
 .pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
 .pager .muted { color: var(--text-secondary); font-size: 0.85rem; }
 

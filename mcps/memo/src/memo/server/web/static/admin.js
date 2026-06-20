@@ -117,9 +117,10 @@ const memoPagerEl = document.getElementById("memo-pager");
 const memoPageInfoEl = document.getElementById("memo-pageinfo");
 const memoPrevBtn = document.getElementById("memo-prev");
 const memoNextBtn = document.getElementById("memo-next");
+const memoFilterCategoryEl = document.getElementById("memo-filter-category");
 
-// 現在表示中のメモ一覧の状態 (どのユーザーの何ページ目か)。
-const memoView = { user: null, page: 1, totalPages: 0 };
+// 現在表示中のメモ一覧の状態 (どのユーザーの何ページ目か・カテゴリ絞り込み)。
+const memoView = { user: null, page: 1, totalPages: 0, category: "" };
 
 function renderMemoRow(memo, user) {
   const tr = document.createElement("tr");
@@ -127,6 +128,7 @@ function renderMemoRow(memo, user) {
   tr.innerHTML = `
     <td class="muted">${memo.id}</td>
     <td>${escapeHtml(memo.title)}</td>
+    <td><span class="cat-badge">${escapeHtml(memo.category)}</span></td>
     <td class="summary">${escapeHtml(memo.summary)}</td>
     <td class="muted">${escapeHtml(memo.updated_at)}</td>
     <td class="actions">
@@ -154,14 +156,15 @@ function renderMemoRow(memo, user) {
   return tr;
 }
 
-async function loadMemos(name, page) {
+async function loadMemos(name, page, category = memoView.category) {
   try {
-    const data = await api(
-      `/api/users/${encodeURIComponent(name)}/memos?page=${page}&per_page=${PER_PAGE}`
-    );
+    let path = `/api/users/${encodeURIComponent(name)}/memos?page=${page}&per_page=${PER_PAGE}`;
+    if (category) path += `&category=${encodeURIComponent(category)}`;
+    const data = await api(path);
     memoView.user = name;
     memoView.page = data.page;
     memoView.totalPages = data.total_pages;
+    memoView.category = category;
 
     memoUserEl.textContent = name;
     memoRowsEl.replaceChildren(...data.items.map((m) => renderMemoRow(m, name)));
@@ -184,7 +187,9 @@ async function loadMemos(name, page) {
 }
 
 function openMemos(name) {
-  loadMemos(name, 1);
+  // ユーザーを開き直すときはカテゴリ絞り込みをリセットする。
+  memoFilterCategoryEl.value = "";
+  loadMemos(name, 1, "");
 }
 
 memoPrevBtn.addEventListener("click", () => {
@@ -192,6 +197,23 @@ memoPrevBtn.addEventListener("click", () => {
 });
 memoNextBtn.addEventListener("click", () => {
   if (memoView.page < memoView.totalPages) loadMemos(memoView.user, memoView.page + 1);
+});
+
+// カテゴリ絞り込み: 入力値で 1 ページ目から取り直す。空ならクリア (全カテゴリ)。
+function applyMemoFilter() {
+  if (!memoView.user) return;
+  loadMemos(memoView.user, 1, memoFilterCategoryEl.value.trim());
+}
+memoFilterCategoryEl.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    applyMemoFilter();
+  }
+});
+document.getElementById("memo-filter-apply").addEventListener("click", applyMemoFilter);
+document.getElementById("memo-filter-clear").addEventListener("click", () => {
+  memoFilterCategoryEl.value = "";
+  applyMemoFilter();
 });
 document.getElementById("memo-close").addEventListener("click", () => {
   memoCard.hidden = true;
@@ -204,6 +226,7 @@ const memoEditCard = document.getElementById("memo-edit-card");
 const memoEditHeadingEl = document.getElementById("memo-edit-heading");
 const memoEditForm = document.getElementById("memo-edit-form");
 const editTitleEl = document.getElementById("edit-memo-title");
+const editCategoryEl = document.getElementById("edit-memo-category");
 const editSummaryEl = document.getElementById("edit-memo-summary");
 
 // 編集対象の状態。id が null なら新規作成、数値なら既存メモの更新。
@@ -217,6 +240,7 @@ function openMemoEditor(user, memo = null) {
     ? `「${user}」のメモを編集 (#${memo.id})`
     : `「${user}」に新しいメモを追加`;
   editTitleEl.value = memo ? memo.title : "";
+  editCategoryEl.value = memo ? memo.category : "";
   editSummaryEl.value = memo ? memo.summary : "";
 
   memoCard.hidden = true;
@@ -249,6 +273,7 @@ memoEditForm.addEventListener("submit", async (ev) => {
   if (!memoEdit.user) return;
   const title = editTitleEl.value.trim();
   const summary = editSummaryEl.value;
+  const category = editCategoryEl.value.trim(); // 空欄はサーバー側で OTHERS に正規化
   if (!title) {
     showToast("タイトルは必須です", true);
     return;
@@ -260,7 +285,7 @@ memoEditForm.addEventListener("submit", async (ev) => {
   try {
     await api(path, {
       method: isNew ? "POST" : "PUT",
-      body: JSON.stringify({ title, summary }),
+      body: JSON.stringify({ title, summary, category }),
     });
     showToast(isNew ? "メモを追加しました" : `メモ #${memoEdit.id} を更新しました`);
     // 新規は更新日時が最新 → 1ページ目の先頭。編集は元のページに戻る。

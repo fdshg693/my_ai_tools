@@ -11,6 +11,8 @@
 
 import json
 
+from memo.infra.database import ADMIN_USER
+from memo.repository.memo import list_categories_db
 from memo.repository.user import is_registered_user
 from memo.server.mcp.app import mcp
 from memo.server.mcp.auth import (
@@ -155,6 +157,8 @@ def switch_user(target: str) -> str:
     stdio では以後この接続のメモ操作が target のものになる (サーバー再起動は不要)。
     HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと
     切り替え状態を保持できない)。admin への切り替えも可能。
+    成功時は、切り替え先ユーザーのメモが持つカテゴリ一覧も併せて返す
+    (検索・一覧を category で絞り込む際の手掛かりになる)。
     """
     _user, _is_admin, error = resolve_caller()
     if error:
@@ -165,10 +169,18 @@ def switch_user(target: str) -> str:
     if not is_registered_user(target):
         return f"Error: user '{target}' is not registered."
 
+    # 切り替え先がメモを持つカテゴリ一覧を添える。admin への切り替えは全メモが対象。
+    categories = list_categories_db(target, is_admin=target == ADMIN_USER)
+    cat_note = (
+        "メモのカテゴリ: " + ", ".join(categories)
+        if categories
+        else "(カテゴリを持つメモはまだありません)"
+    )
+
     if not transport_is_http():
         # stdio: モジュール変数を実行時書き換え (GIL 下の単純代入で安全)
         set_stdio_user(target)
-        return f"Switched user to '{target}'."
+        return f"Switched user to '{target}'. {cat_note}"
 
     client_id = http_client_id()
     if client_id is None:
@@ -177,4 +189,4 @@ def switch_user(target: str) -> str:
             "(client_id が無いと切り替え状態を保持できません)。"
         )
     switch_http_user(client_id, target)
-    return f"Switched user to '{target}' (client_id={client_id})."
+    return f"Switched user to '{target}' (client_id={client_id}). {cat_note}"

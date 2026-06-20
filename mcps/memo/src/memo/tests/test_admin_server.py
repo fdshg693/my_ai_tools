@@ -296,3 +296,46 @@ def test_delete_user_memo_missing_404(client):
     client.post("/api/users", json={"name": "yan"})
     res = client.delete("/api/users/yan/memos/99999")
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# カテゴリ: 作成時の指定・既定 OTHERS・更新・一覧の絞り込み
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_memo_with_category(client):
+    client.post("/api/users", json={"name": "cat-a"})
+    res = client.post(
+        "/api/users/cat-a/memos", json={"title": "T", "category": "work"}
+    )
+    assert res.status_code == 201
+    assert res.json()["category"] == "WORK"  # 大文字に正規化
+
+
+def test_create_user_memo_defaults_category_others(client):
+    client.post("/api/users", json={"name": "cat-b"})
+    res = client.post("/api/users/cat-b/memos", json={"title": "T"})
+    assert res.json()["category"] == "OTHERS"
+
+
+def test_update_user_memo_category(client):
+    client.post("/api/users", json={"name": "cat-c"})
+    memo = create_memo_db("cat-c", "T", "", category="work")
+    res = client.put(
+        f"/api/users/cat-c/memos/{memo['id']}", json={"category": "private"}
+    )
+    assert res.status_code == 200
+    assert res.json()["category"] == "PRIVATE"
+
+
+def test_list_user_memos_filters_by_category(client):
+    client.post("/api/users", json={"name": "cat-d"})
+    create_memo_db("cat-d", "w1", "", category="work")
+    create_memo_db("cat-d", "p1", "", category="private")
+    create_memo_db("cat-d", "o1")  # OTHERS
+
+    work = client.get("/api/users/cat-d/memos?category=work").json()
+    assert work["total"] == 1
+    assert work["items"][0]["title"] == "w1"
+    # 絞り込みなしは全件
+    assert client.get("/api/users/cat-d/memos").json()["total"] == 3

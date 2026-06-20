@@ -101,10 +101,14 @@ async def api_list_user_memos(request: Request) -> JSONResponse:
 
     page = _int_param(request, "page", 1, minimum=1)
     per_page = min(_int_param(request, "per_page", DEFAULT_PER_PAGE, minimum=1), MAX_PER_PAGE)
+    # category クエリがあれば同一カテゴリに絞る (空なら全カテゴリ)。
+    category = request.query_params.get("category") or None
 
     # この画面は「特定ユーザーのメモ」を見るので is_admin は使わず user で絞る。
-    total = count_memos_db(name)
-    memos = list_memos_db(name, limit=per_page, offset=(page - 1) * per_page)
+    total = count_memos_db(name, category=category)
+    memos = list_memos_db(
+        name, limit=per_page, offset=(page - 1) * per_page, category=category
+    )
     total_pages = (total + per_page - 1) // per_page if total else 0
     return JSONResponse(
         {
@@ -135,7 +139,10 @@ async def api_create_user_memo(request: Request) -> JSONResponse:
     if not title:
         return JSONResponse({"error": "title is required"}, status_code=400)
     summary = str(body.get("summary", "")).strip()
-    memo = create_memo_db(name, title, summary)
+    # 省略時は repository が OTHERS に正規化する。
+    category = body.get("category")
+    category = category if isinstance(category, str) else None
+    memo = create_memo_db(name, title, summary, category)
     return JSONResponse(memo, status_code=201)
 
 
@@ -158,8 +165,11 @@ async def api_update_user_memo(request: Request) -> JSONResponse:
         title = None  # 省略 → 変更しない
     summary = body.get("summary")
     summary = summary.strip() if isinstance(summary, str) else None
+    # category 省略 → 変更しない。文字列が来たら repository が正規化する。
+    category = body.get("category")
+    category = category if isinstance(category, str) else None
 
-    memo = update_memo_db(name, memo_id, title, summary)
+    memo = update_memo_db(name, memo_id, title, summary, category=category)
     if memo is None:
         return JSONResponse(
             {"error": f"memo id={memo_id} not found"}, status_code=404

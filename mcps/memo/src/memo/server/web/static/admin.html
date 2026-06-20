@@ -51,11 +51,18 @@
           <button id="memo-close" type="button" class="ghost">閉じる</button>
         </div>
       </div>
+      <div class="memo-filter">
+        <label for="memo-filter-category">カテゴリで絞り込み</label>
+        <input id="memo-filter-category" type="text" placeholder="(全カテゴリ)" autocomplete="off" />
+        <button id="memo-filter-apply" type="button" class="ghost">絞り込み</button>
+        <button id="memo-filter-clear" type="button" class="ghost">クリア</button>
+      </div>
       <table id="memo-table">
         <thead>
           <tr>
             <th class="id-col">ID</th>
             <th>タイトル</th>
+            <th>カテゴリ</th>
             <th>概要</th>
             <th>更新日時</th>
             <th class="actions-col">操作</th>
@@ -80,6 +87,10 @@
         <label class="field">
           <span class="field-label">タイトル (必須)</span>
           <input id="edit-memo-title" type="text" autocomplete="off" required />
+        </label>
+        <label class="field">
+          <span class="field-label">カテゴリ (任意・空欄は OTHERS)</span>
+          <input id="edit-memo-category" type="text" autocomplete="off" placeholder="OTHERS" />
         </label>
         <label class="field">
           <span class="field-label">概要 (任意)</span>

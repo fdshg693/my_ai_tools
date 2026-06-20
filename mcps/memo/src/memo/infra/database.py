@@ -22,6 +22,10 @@ DB_PATH = Path(
 #: 全ユーザーのメモを操作できる特権ユーザー名。init_db() で必ずシードされる。
 ADMIN_USER = "admin"
 
+#: カテゴリ未指定のメモが属する既定カテゴリ。カテゴリ名は大文字に正規化して
+#: 保存・照合する (repository.memo.normalize_category) ため、この定数も大文字。
+OTHERS_CATEGORY = "OTHERS"
+
 
 def init_db() -> None:
     """スキーマを作成する。サーバー起動時に1回だけ呼ぶ (冪等)。
@@ -33,20 +37,27 @@ def init_db() -> None:
     db = sqlite3.connect(DB_PATH)
     try:
         db.execute("PRAGMA journal_mode=WAL")
-        db.execute("""
+        db.execute(f"""
             CREATE TABLE IF NOT EXISTS memos (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 user       TEXT NOT NULL,
                 title      TEXT NOT NULL,
                 summary    TEXT NOT NULL DEFAULT '',
+                category   TEXT NOT NULL DEFAULT '{OTHERS_CATEGORY}',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
-        # 既存 DB に user カラムが無ければ追加する (軽量マイグレーション)
+        # 既存 DB に無いカラムは追加する (軽量マイグレーション)
         columns = {row[1] for row in db.execute("PRAGMA table_info(memos)")}
         if "user" not in columns:
             db.execute("ALTER TABLE memos ADD COLUMN user TEXT NOT NULL DEFAULT ''")
+        if "category" not in columns:
+            # 既存メモはこの ADD COLUMN の DEFAULT で一律 OTHERS に移行される
+            db.execute(
+                "ALTER TABLE memos ADD COLUMN category TEXT NOT NULL "
+                f"DEFAULT '{OTHERS_CATEGORY}'"
+            )
         # ユーザー単位の絞り込みを高速化する
         db.execute("CREATE INDEX IF NOT EXISTS idx_memos_user ON memos(user)")
 

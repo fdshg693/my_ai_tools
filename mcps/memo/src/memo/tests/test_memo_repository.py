@@ -1,12 +1,14 @@
 """repository.memo の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離 + admin 特権)。"""
 
-from memo.infra.database import ADMIN_USER
+from memo.infra.database import ADMIN_USER, OTHERS_CATEGORY
 from memo.repository.memo import (
     count_memos_db,
     create_memo_db,
     delete_memo_db,
     get_memo_db,
+    list_categories_db,
     list_memos_db,
+    normalize_category,
     search_memos_db,
     update_memo_db,
 )
@@ -274,3 +276,108 @@ def test_admin_delete_any_users_memo():
     memo = create_memo_db(ALICE, "alice のメモ", "")
     assert delete_memo_db(ADMIN_USER, memo["id"], is_admin=True) is True
     assert get_memo_db(ALICE, memo["id"]) is None
+
+
+# ---------------------------------------------------------------------------
+# カテゴリ: 未指定は OTHERS・大文字正規化・同一カテゴリでの絞り込み
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_category_rules():
+    assert normalize_category(None) == OTHERS_CATEGORY
+    assert normalize_category("") == OTHERS_CATEGORY
+    assert normalize_category("   ") == OTHERS_CATEGORY
+    assert normalize_category("  work ") == "WORK"
+    assert normalize_category("Work") == "WORK"
+
+
+def test_create_defaults_to_others():
+    memo = create_memo_db(ALICE, "カテゴリなし")
+    assert memo["category"] == OTHERS_CATEGORY
+
+
+def test_create_normalizes_category():
+    memo = create_memo_db(ALICE, "仕事メモ", "", category="work")
+    assert memo["category"] == "WORK"
+    # 保存後も get で同じ値が読める
+    assert get_memo_db(ALICE, memo["id"])["category"] == "WORK"
+
+
+def test_list_filters_by_category():
+    create_memo_db(ALICE, "w1", "", category="work")
+    create_memo_db(ALICE, "w2", "", category="WORK")
+    create_memo_db(ALICE, "p1", "", category="private")
+    create_memo_db(ALICE, "o1")  # OTHERS
+
+    work = {m["title"] for m in list_memos_db(ALICE, category="work")}
+    assert work == {"w1", "w2"}
+    others = {m["title"] for m in list_memos_db(ALICE, category=None)}
+    assert others == {"w1", "w2", "p1", "o1"}  # None は全カテゴリ
+    just_others = {m["title"] for m in list_memos_db(ALICE, category="OTHERS")}
+    assert just_others == {"o1"}
+
+
+def test_count_filters_by_category():
+    create_memo_db(ALICE, "w1", "", category="work")
+    create_memo_db(ALICE, "w2", "", category="work")
+    create_memo_db(ALICE, "o1")
+    assert count_memos_db(ALICE, category="WORK") == 2
+    assert count_memos_db(ALICE) == 3
+
+
+def test_search_filters_by_category():
+    create_memo_db(ALICE, "会議メモ", "", category="work")
+    create_memo_db(ALICE, "買い物メモ", "", category="private")
+
+    results = search_memos_db(ALICE, ["メモ"], category="work")
+    assert {m["title"] for m in results} == {"会議メモ"}
+    # カテゴリ未指定なら両方
+    assert len(search_memos_db(ALICE, ["メモ"])) == 2
+
+
+def test_update_changes_category():
+    memo = create_memo_db(ALICE, "メモ", "", category="work")
+    updated = update_memo_db(ALICE, memo["id"], category="private")
+    assert updated["category"] == "PRIVATE"
+    # title/summary は据え置き
+    assert updated["title"] == "メモ"
+
+
+def test_update_without_category_keeps_existing():
+    memo = create_memo_db(ALICE, "メモ", "概要", category="work")
+    updated = update_memo_db(ALICE, memo["id"], summary="概要を更新")
+    assert updated["category"] == "WORK"  # category 省略 → 変更しない
+
+
+def test_update_empty_category_resets_to_others():
+    memo = create_memo_db(ALICE, "メモ", "", category="work")
+    updated = update_memo_db(ALICE, memo["id"], category="")
+    assert updated["category"] == OTHERS_CATEGORY
+
+
+def test_admin_search_filters_by_category():
+    create_memo_db(ALICE, "共有メモ", "", category="work")
+    create_memo_db(BOB, "共有メモ", "", category="private")
+    results = search_memos_db(ADMIN_USER, ["共有"], is_admin=True, category="work")
+    assert {m["user"] for m in results} == {ALICE}
+
+
+def test_list_categories_distinct_sorted_per_user():
+    create_memo_db(ALICE, "a1", "", category="work")
+    create_memo_db(ALICE, "a2", "", category="WORK")  # 重複は1つに
+    create_memo_db(ALICE, "a3", "", category="private")
+    create_memo_db(ALICE, "a4")  # OTHERS
+    create_memo_db(BOB, "b1", "", category="finance")  # 他人のは出ない
+
+    assert list_categories_db(ALICE) == ["OTHERS", "PRIVATE", "WORK"]  # 名前順
+    assert list_categories_db(BOB) == ["FINANCE"]
+
+
+def test_list_categories_empty_when_no_memos():
+    assert list_categories_db(ALICE) == []
+
+
+def test_list_categories_admin_spans_all_users():
+    create_memo_db(ALICE, "a1", "", category="work")
+    create_memo_db(BOB, "b1", "", category="finance")
+    assert list_categories_db(ADMIN_USER, is_admin=True) == ["FINANCE", "WORK"]
