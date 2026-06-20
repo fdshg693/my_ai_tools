@@ -8,9 +8,7 @@ repository へ渡すことで全ユーザー (``user=''`` の孤立メモ含む)
 
 import json
 
-from memo.authz import resolve_caller
-from memo.embedding import EmbeddingError
-from memo.main import mcp
+from memo.infra.embedding import EmbeddingError
 from memo.repository.memo import (
     create_memo_db,
     delete_memo_db,
@@ -19,7 +17,9 @@ from memo.repository.memo import (
     search_memos_db,
     update_memo_db,
 )
-from memo.service import semantic_search
+from memo.server.mcp.app import mcp
+from memo.server.mcp.authz import resolve_caller
+from memo.service.memo import semantic_search
 
 
 def _dump(obj) -> str:

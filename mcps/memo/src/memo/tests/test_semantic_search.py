@@ -7,8 +7,8 @@ OPENAI_API_KEY も不要でテストできる。
 
 import pytest
 
-from memo import service
-from memo.database import ADMIN_USER
+from memo.infra.database import ADMIN_USER
+from memo.service import memo as service
 from memo.repository.memo import create_memo_db, update_memo_db
 
 ALICE = "alice"

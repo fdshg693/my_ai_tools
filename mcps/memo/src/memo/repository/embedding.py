@@ -8,7 +8,7 @@
 
 import json
 
-from memo.database import _connect_db
+from memo.infra.database import _connect_db
 
 
 def get_cached_embedding(memo_id: int) -> dict | None:

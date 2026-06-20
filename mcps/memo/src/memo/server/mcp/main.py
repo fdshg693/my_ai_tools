@@ -1,7 +1,8 @@
-"""シンプルなメモ管理MCPサーバー。
+"""シンプルなメモ管理MCPサーバーのエントリポイント。
 
-タイトル・概要を持つメモを SQLite に保存し、CRUD とタイトル部分一致検索を
-MCP ツールとして提供する。
+``mcp`` インスタンス本体・ツール登録・``init_db()`` は ``app.py`` にあり、
+ここはコマンドライン引数の解釈とトランスポート (stdio/http) の分岐だけを担う。
+``app`` を import した時点でツールが登録され、スキーマも初期化される。
 """
 
 import argparse
@@ -9,18 +10,7 @@ import logging
 import os
 import sys
 
-from fastmcp import FastMCP
-from starlette.responses import JSONResponse
-
-from memo.database import init_db
-from memo.logging_middleware import AuditLogMiddleware
-
-mcp = FastMCP("memo")
-mcp.add_middleware(AuditLogMiddleware())  # 全ツール呼び出しを横断的にログする
-
-import memo.tools  # noqa: E402, F401 — ツール登録 (side-effect import)
-
-init_db()  # どの起動経路でも確実にスキーマを用意する
+from memo.server.mcp.app import mcp
 
 
 def _configure_logging(debug: bool) -> None:
@@ -38,11 +28,6 @@ def _configure_logging(debug: bool) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     logging.getLogger("memo").setLevel(logging.DEBUG if debug else logging.INFO)
-
-
-@mcp.custom_route("/health", methods=["GET"])
-async def health(request):
-    return JSONResponse({"status": "healthy"})
 
 
 def main():
@@ -63,7 +48,7 @@ def main():
     args = parser.parse_args()
     _configure_logging(args.debug)
 
-    from memo.auth import set_http_transport, set_stdio_user
+    from memo.server.mcp.auth import set_http_transport, set_stdio_user
 
     transport = os.environ.get("TRANSPORT", "stdio")
     is_http = transport == "http"

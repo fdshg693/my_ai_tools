@@ -11,22 +11,25 @@
 
 import json
 
-from memo.auth import (
+from memo.repository.user import is_registered_user
+from memo.server.mcp.app import mcp
+from memo.server.mcp.auth import (
     http_client_id,
     set_stdio_user,
     switch_http_user,
     transport_is_http,
 )
-from memo.authz import ADMIN_ONLY_ERROR, resolve_caller
-from memo.database import ADMIN_USER
-from memo.main import mcp
-from memo.repository.user import (
-    create_user_db,
-    delete_user_db,
-    get_user_db,
-    is_registered_user,
-    list_users_db,
-    update_user_db,
+from memo.server.mcp.authz import ADMIN_ONLY_ERROR, resolve_caller
+from memo.service.user import (
+    CannotDeleteAdmin,
+    NameRequired,
+    UserAlreadyExists,
+    UserNotFound,
+    create_user as create_user_service,
+    delete_user as delete_user_service,
+    get_user as get_user_service,
+    list_users as list_users_service,
+    update_user as update_user_service,
 )
 
 
@@ -50,13 +53,13 @@ def create_user(name: str, display_name: str = "", note: str = "") -> str:
         return error
     if not is_admin:
         return ADMIN_ONLY_ERROR
-    name = name.strip()
-    if not name:
+    try:
+        created = create_user_service(name, display_name, note)
+    except NameRequired:
         return "Error: name is required."
-    created = create_user_db(name, display_name.strip(), note.strip())
-    if created is None:
-        return f"User '{name}' already exists."
-    return f"Created user '{name}'."
+    except UserAlreadyExists as e:
+        return f"User '{e.name}' already exists."
+    return f"Created user '{created['name']}'."
 
 
 @mcp.tool
@@ -71,7 +74,7 @@ def list_users() -> str:
         return error
     if not is_admin:
         return ADMIN_ONLY_ERROR
-    users = list_users_db()
+    users = list_users_service()
     if not users:
         return "No users found."
     return _dump(users)
@@ -90,8 +93,9 @@ def get_user(name: str) -> str:
         return error
     if not is_admin:
         return ADMIN_ONLY_ERROR
-    user = get_user_db(name.strip())
-    if user is None:
+    try:
+        user = get_user_service(name)
+    except UserNotFound:
         return f"User '{name}' not found."
     return _dump(user)
 
@@ -111,12 +115,9 @@ def update_user(name: str, display_name: str | None = None, note: str | None = N
         return error
     if not is_admin:
         return ADMIN_ONLY_ERROR
-    updated = update_user_db(
-        name.strip(),
-        display_name.strip() if display_name is not None else None,
-        note.strip() if note is not None else None,
-    )
-    if updated is None:
+    try:
+        update_user_service(name, display_name, note)
+    except UserNotFound:
         return f"User '{name}' not found."
     return f"Updated user '{name}'."
 
@@ -136,10 +137,11 @@ def delete_user(name: str) -> str:
     if not is_admin:
         return ADMIN_ONLY_ERROR
     name = name.strip()
-    if name == ADMIN_USER:
-        return f"Error: cannot delete the admin user '{ADMIN_USER}'."
-    deleted = delete_user_db(name)
-    if not deleted:
+    try:
+        delete_user_service(name)
+    except CannotDeleteAdmin as e:
+        return f"Error: cannot delete the admin user '{e.name}'."
+    except UserNotFound:
         return f"User '{name}' not found."
     return f"Deleted user '{name}'."
 

@@ -23,7 +23,7 @@ import logging
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
-from memo.auth import current_user, transport_is_http
+from memo.server.mcp.auth import current_user, transport_is_http
 
 logger = logging.getLogger(__name__)  # "memo.logging_middleware"
 

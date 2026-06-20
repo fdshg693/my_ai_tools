@@ -9,4 +9,4 @@
 ``mcp`` インスタンスに登録される。
 """
 
-from memo.tools import memo, user  # noqa: F401 — ツール登録 (side-effect import)
+from memo.server.mcp.tools import memo, user  # noqa: F401 — ツール登録 (side-effect import)

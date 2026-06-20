@@ -1,6 +1,6 @@
 """repository.user の単体テスト (ユーザー台帳の CRUD + 登録判定)。"""
 
-from memo.database import ADMIN_USER
+from memo.infra.database import ADMIN_USER
 from memo.repository.memo import create_memo_db, get_memo_db
 from memo.repository.user import (
     create_user_db,

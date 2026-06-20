@@ -7,7 +7,7 @@ conftest.py が DB を一時ファイルに差し替え、各テスト前に adm
 import pytest
 from starlette.testclient import TestClient
 
-from memo.admin_server import create_app
+from memo.server.web.app import create_app
 
 
 @pytest.fixture

@@ -12,8 +12,8 @@ import pytest
 # ---------------------------------------------------------------------------
 # 1. DB パスを一時ファイルに差し替え (実 DB を触らないようにする)
 # ---------------------------------------------------------------------------
-import memo.auth as _auth_mod
-import memo.database as _db_mod
+import memo.infra.database as _db_mod
+import memo.server.mcp.auth as _auth_mod
 
 _test_db_dir = tempfile.mkdtemp()
 _db_mod.DB_PATH = Path(_test_db_dir) / "test_memo.db"

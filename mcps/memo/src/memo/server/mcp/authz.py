@@ -10,9 +10,9 @@
   ユーザーのメモを、ユーザー管理ツールは台帳の操作を許可する。
 """
 
-from memo.auth import current_user
-from memo.database import ADMIN_USER
+from memo.infra.database import ADMIN_USER
 from memo.repository.user import is_registered_user
+from memo.server.mcp.auth import current_user
 
 NO_USER_ERROR = (
     "Error: user is not identified. "

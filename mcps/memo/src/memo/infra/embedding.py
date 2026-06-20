@@ -15,8 +15,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 #: パッケージルート (mcps/memo) の .env。簡単のためここ固定で読み込む。
-#: __file__ = mcps/memo/src/memo/embedding.py → parents[2] = mcps/memo
-_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+#: __file__ = mcps/memo/src/memo/infra/embedding.py → parents[3] = mcps/memo
+_ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
 load_dotenv(_ENV_PATH)
 
 #: 埋め込みモデル。多言語対応で日本語の概要にも使える。環境変数で上書き可。

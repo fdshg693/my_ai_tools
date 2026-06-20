@@ -14,14 +14,14 @@ import logging
 
 from fastmcp import Client
 
-from memo import auth as auth_module
-from memo import service
-from memo.auth import set_stdio_user
-from memo.database import ADMIN_USER
-from memo.embedding import EmbeddingError
-from memo.main import mcp  # init_db() はモジュール読み込み時に実行される
+from memo.infra.database import ADMIN_USER
+from memo.infra.embedding import EmbeddingError
 from memo.repository.memo import create_memo_db
 from memo.repository.user import create_user_db
+from memo.server.mcp import auth as auth_module
+from memo.server.mcp.app import mcp  # init_db() はモジュール読み込み時に実行される
+from memo.server.mcp.auth import set_stdio_user
+from memo.service import memo as service
 
 EXPECTED_TOOLS = {
     "create_memo",
@@ -253,22 +253,22 @@ def test_audit_log_emits_info_line_per_tool_call(caplog):
     create_user_db("logwatcher")
     set_stdio_user("logwatcher")
     try:
-        with caplog.at_level(logging.INFO, logger="memo.logging_middleware"):
+        with caplog.at_level(logging.INFO, logger="memo.server.mcp.logging_middleware"):
             asyncio.run(_call("create_memo", {"title": "ログ確認"}))
     finally:
         set_stdio_user(None)
-    msgs = [r.getMessage() for r in caplog.records if r.name == "memo.logging_middleware"]
+    msgs = [r.getMessage() for r in caplog.records if r.name == "memo.server.mcp.logging_middleware"]
     assert any("tool=create_memo" in m and "user=logwatcher" in m for m in msgs)
 
 
 def test_audit_log_debug_includes_initialize(caplog):
     set_stdio_user(ADMIN_USER)
     try:
-        with caplog.at_level(logging.DEBUG, logger="memo.logging_middleware"):
+        with caplog.at_level(logging.DEBUG, logger="memo.server.mcp.logging_middleware"):
             asyncio.run(_list_tool_names())  # 接続時に initialize が走る
     finally:
         set_stdio_user(None)
-    msgs = [r.getMessage() for r in caplog.records if r.name == "memo.logging_middleware"]
+    msgs = [r.getMessage() for r in caplog.records if r.name == "memo.server.mcp.logging_middleware"]
     assert any("method=initialize" in m for m in msgs)
 
 

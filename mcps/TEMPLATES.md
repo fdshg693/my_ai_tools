@@ -2,14 +2,14 @@
 
 ## ドキュメント
 
-- README.md
-    - README は人間が読むためのドキュメントです。起動手順・アプリの概要と意味・他ファイルへの参照・注意点を、網羅は目指さずまとまりよく **日本語** で書きます。実装・調査の詳細は AI 向けの [CLAUDE.md](./CLAUDE.md)（英語）に任せます。ツールのドキュメントは [TOOLS.md](./TOOLS.md)（日本語）に任せます。
-- CLAUDE.md
-    - CLAUDE.md is the AI-facing document. Keep implementation and investigation details here, written in **English**. Human-facing material (startup steps, app overview, caveats) belongs in [README.md](./README.md), written in Japanese.
-- TOOLS.md
+- `README.md`
+    - README は人間が読むためのドキュメントです。起動手順・アプリの概要と意味・他ファイルへの参照・注意点を、網羅は目指さずまとまりよく **日本語** で書きます。実装・調査の詳細は AI 向けの `CLAUDE.md` (英語)に任せます。ツールのドキュメントは `TOOLS.md` (日本語)に任せます。
+- `CLAUDE.md`
+    - `CLAUDE.md` is the AI-facing document. Keep implementation and investigation details here, written in **English**. Human-facing material (startup steps, app overview, caveats) belongs in `README.md`, written in Japanese.
+- `TOOLS.md`
     - MCP サーバーが公開するツールのドキュメントです。ツールの使い方や注意点を、網羅は目指さずまとまりよく **日本語** で書きます。
     - ツール名・ツールのサマリは網羅が必要ですが、ツールの引数やオプションは網羅が不要な場合もあります。必要に応じて、ツールの引数やオプションの説明を省略しても構いません。
-- USECASE.md
+- `USECASE.md`
     - 必要に応じて、このMCPサーバーを使ったユースケースや、AIに与えるシステムプロンプトの例などをまとめます。内容は **日本語** で書きます。
 
 ## コード

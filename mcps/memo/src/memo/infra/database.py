@@ -13,7 +13,11 @@ import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("MEMO_DB_PATH", str(Path(__file__).parent / "memo.db")))
+# __file__ = src/memo/infra/database.py → parent.parent = src/memo (memo.db の場所)。
+# infra/ へ移動して1階層深くなったぶん parent.parent で従来と同じ場所を指す。
+DB_PATH = Path(
+    os.environ.get("MEMO_DB_PATH", str(Path(__file__).parent.parent / "memo.db"))
+)
 
 #: 全ユーザーのメモを操作できる特権ユーザー名。init_db() で必ずシードされる。
 ADMIN_USER = "admin"

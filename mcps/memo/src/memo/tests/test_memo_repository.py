@@ -1,6 +1,6 @@
 """repository.memo の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離 + admin 特権)。"""
 
-from memo.database import ADMIN_USER
+from memo.infra.database import ADMIN_USER
 from memo.repository.memo import (
     create_memo_db,
     delete_memo_db,

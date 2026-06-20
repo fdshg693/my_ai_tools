@@ -10,7 +10,7 @@
 
 import sqlite3
 
-from memo.database import _connect_db
+from memo.infra.database import _connect_db
 
 
 def _user_row_to_dict(row: sqlite3.Row) -> dict:
