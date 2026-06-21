@@ -2,7 +2,7 @@
 
 ## User switching
 
-`switch_user(target)` changes the connection's current user without reconnecting/restarting, separating a **stable client identity** from the **mutable current user**. The success message also surfaces the target's memo categories (`list_categories_db`) so the caller can immediately scope follow-up `list_memos`/`search_memos`/`semantic_search_memos` calls by `category`:
+`switch_user(target)` changes the connection's current user without reconnecting/restarting, separating a **stable client identity** from the **mutable current user**. The success message also surfaces the target's memo categories (via `service.category.list_categories`) so the caller can immediately scope follow-up `list_memos`/`search_memos`/`semantic_search_memos` calls by `category`:
 
 - **stdio** (per-process, single user): rewrites the module-level `_stdio_user` via `set_stdio_user`. A single-assignment write is atomic under the GIL.
 - **HTTP** (shared, multi-client): keyed by the self-supplied `?client_id=` query param, not by `Mcp-Session-Id`. `Mcp-Session-Id` is stable within one connection but **changes on reconnect (re-initialize)**, so it cannot persist switch state; `client_id` is stable across reconnects. `current_user()` seeds `_http_user_by_client[client_id]` from `?user=` with `setdefault` (first value wins), and `switch_user` overwrites it. HTTP without `client_id` cannot hold switch state and `switch_user` returns an error.

@@ -14,8 +14,8 @@ import json
 from fastmcp import Context
 
 from memo.infra.database import ADMIN_USER
-from memo.repository.memo import list_categories_db
 from memo.repository.user import is_registered_user
+from memo.service.category import list_categories
 from memo.server.mcp.admin_tools import ADMIN_TOOL_TAG, apply_session_visibility
 from memo.server.mcp.app import mcp
 from memo.server.mcp.auth import (
@@ -178,7 +178,7 @@ async def switch_user(target: str, ctx: Context) -> str:
     """stdio は set_stdio_user、HTTP は client_id→user マップを書き換える。
 
     admin 専用ではなく、登録済みなら誰でも切替可。成功メッセージに target の
-    カテゴリ一覧 (list_categories_db) を添える。切替後、この接続だけ admin タグの
+    カテゴリ一覧 (service.category.list_categories) を添える。切替後、この接続だけ admin タグの
     ツールの可視性を ``apply_session_visibility`` で更新する (admin → 有効化、
     admin 以外 → 無効化)。FastMCP がこの変更で list_changed をクライアントへ自動送信する。
     """
@@ -192,7 +192,7 @@ async def switch_user(target: str, ctx: Context) -> str:
         return f"Error: user '{target}' is not registered."
 
     # 切り替え先がメモを持つカテゴリ一覧を添える。admin への切り替えは全メモが対象。
-    categories = list_categories_db(target, is_admin=target == ADMIN_USER)
+    categories = list_categories(target, is_admin=target == ADMIN_USER)
     cat_note = (
         "メモのカテゴリ: " + ", ".join(categories)
         if categories

@@ -9,17 +9,18 @@ repository へ渡すことで全ユーザー (``user=''`` の孤立メモ含む)
 import json
 
 from memo.infra.embedding import EmbeddingError
-from memo.repository.memo import (
-    create_memo_db,
-    delete_memo_db,
-    get_memo_db,
-    list_memos_db,
-    search_memos_db,
-    update_memo_db,
-)
 from memo.server.mcp.app import mcp
 from memo.server.mcp.authz import resolve_caller
-from memo.service.memo import semantic_search
+from memo.service.memo import (
+    TitleRequired,
+    semantic_search,
+    create_memo as create_memo_service,
+    delete_memo as delete_memo_service,
+    get_memo as get_memo_service,
+    list_memos as list_memos_service,
+    search_memos as search_memos_service,
+    update_memo as update_memo_service,
+)
 
 
 def _dump(obj) -> str:
@@ -38,17 +39,18 @@ def _dump(obj) -> str:
     )
 )
 def create_memo(title: str, summary: str = "", category: str = "") -> str:
-    """resolve_caller() の接続ユーザーを所有者として create_memo_db に渡す。
+    """resolve_caller() の接続ユーザーを所有者として service.create_memo に渡す。
 
-    category の正規化 (trim + 大文字化, 空→OTHERS) は repository 側で行う。
+    title 必須 (空なら ``TitleRequired``) と category 正規化 (空→OTHERS) は
+    service / repository 側で行う。
     """
     user, _is_admin, error = resolve_caller()
     if error:
         return error
-    title = title.strip()
-    if not title:
+    try:
+        memo = create_memo_service(user, title, summary, category)
+    except TitleRequired:
         return "Error: title is required."
-    memo = create_memo_db(user, title, summary.strip(), category)
     return f"Created memo id={memo['id']} (category={memo['category']})."
 
 
@@ -65,7 +67,7 @@ def get_memo(memo_id: int) -> str:
     user, is_admin, error = resolve_caller()
     if error:
         return error
-    memo = get_memo_db(user, memo_id, is_admin=is_admin)
+    memo = get_memo_service(user, memo_id, is_admin=is_admin)
     if memo is None:
         return f"Memo id={memo_id} not found."
     return _dump(memo)
@@ -86,7 +88,9 @@ def list_memos(limit: int = 50, category: str = "") -> str:
     user, is_admin, error = resolve_caller()
     if error:
         return error
-    memos = list_memos_db(user, limit, is_admin=is_admin, category=category.strip() or None)
+    memos = list_memos_service(
+        user, limit, is_admin=is_admin, category=category.strip() or None
+    )
     if not memos:
         return "No memos found."
     return _dump(memos)
@@ -106,7 +110,7 @@ def list_memos(limit: int = 50, category: str = "") -> str:
     )
 )
 def search_memos(query: str, limit: int = 50, category: str = "") -> str:
-    """query をカンマ分割し重複除去したキーワード列で部分一致検索 (repository)。"""
+    """query をカンマ分割し重複除去したキーワード列で部分一致検索 (service 経由)。"""
     user, is_admin, error = resolve_caller()
     if error:
         return error
@@ -119,7 +123,7 @@ def search_memos(query: str, limit: int = 50, category: str = "") -> str:
             keywords.append(kw)
     if not keywords:
         return "Error: query is required."
-    memos = search_memos_db(
+    memos = search_memos_service(
         user, keywords, limit, is_admin=is_admin, category=category.strip() or None
     )
     if not memos:
@@ -181,21 +185,25 @@ def update_memo(
     summary: str | None = None,
     category: str | None = None,
 ) -> str:
-    """指定フィールドのみ更新。category の None=変更しない / 空文字=OTHERS は repository 側。
+    """指定フィールドのみ更新。title 必須チェック (空→TitleRequired) と trim は service、
+    category の None=変更しない / 空文字=OTHERS は repository 側。
 
-    is_admin を repository へ渡し、admin は所有者を問わず更新する。
+    is_admin を service/repository へ渡し、admin は所有者を問わず更新する。
     """
     user, is_admin, error = resolve_caller()
     if error:
         return error
-    memo = update_memo_db(
-        user,
-        memo_id,
-        title.strip() if title is not None else None,
-        summary.strip() if summary is not None else None,
-        is_admin=is_admin,
-        category=category,  # None=変更しない / "" は repository が OTHERS に正規化
-    )
+    try:
+        memo = update_memo_service(
+            user,
+            memo_id,
+            title,
+            summary,
+            is_admin=is_admin,
+            category=category,  # None=変更しない / "" は repository が OTHERS に正規化
+        )
+    except TitleRequired:
+        return "Error: title is required."
     if memo is None:
         return f"Memo id={memo_id} not found."
     return f"Updated memo id={memo_id}."
@@ -213,7 +221,7 @@ def delete_memo(memo_id: int) -> str:
     user, is_admin, error = resolve_caller()
     if error:
         return error
-    deleted = delete_memo_db(user, memo_id, is_admin=is_admin)
+    deleted = delete_memo_service(user, memo_id, is_admin=is_admin)
     if not deleted:
         return f"Memo id={memo_id} not found."
     return f"Deleted memo id={memo_id}."

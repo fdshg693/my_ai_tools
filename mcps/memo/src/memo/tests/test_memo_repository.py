@@ -1,14 +1,13 @@
 """repository.memo の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離 + admin 特権)。"""
 
 from memo.infra.database import ADMIN_USER, OTHERS_CATEGORY
+from memo.repository.category import list_categories_db, normalize_category
 from memo.repository.memo import (
     count_memos_db,
     create_memo_db,
     delete_memo_db,
     get_memo_db,
-    list_categories_db,
     list_memos_db,
-    normalize_category,
     search_memos_db,
     update_memo_db,
 )

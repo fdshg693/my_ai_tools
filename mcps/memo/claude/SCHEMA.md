@@ -12,7 +12,7 @@ SQLite with WAL journaling (`memo.db`). `init_db()` creates the schema at server
 | `user` | TEXT NOT NULL | Owning user name. Indexed by `idx_memos_user` |
 | `title` | TEXT NOT NULL | Title |
 | `summary` | TEXT NOT NULL DEFAULT '' | Summary |
-| `category` | TEXT NOT NULL DEFAULT 'OTHERS' | Category. Normalized (trim + uppercase) on write; empty/unspecified → `OTHERS` (`OTHERS_CATEGORY`). See [features/category.md](features/category.md) |
+| `category` | TEXT NOT NULL DEFAULT 'OTHERS' | Category. Normalized (trim + uppercase) on write by `repository.category.normalize_category`; empty/unspecified → `OTHERS` (`OTHERS_CATEGORY`). See [features/category.md](features/category.md) |
 | `created_at` | TEXT NOT NULL | Created timestamp |
 | `updated_at` | TEXT NOT NULL | Updated timestamp (set to `datetime('now')` on update) |
 

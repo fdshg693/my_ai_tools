@@ -23,12 +23,13 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memo.repository.memo import (
-    count_memos_db,
-    create_memo_db,
-    delete_memo_db,
-    list_memos_db,
-    update_memo_db,
+from memo.service.memo import (
+    TitleRequired,
+    count_memos as count_memos_service,
+    create_memo as create_memo_service,
+    delete_memo as delete_memo_service,
+    list_memos as list_memos_service,
+    update_memo as update_memo_service,
 )
 from memo.service.user import (
     CannotDeleteAdmin,
@@ -105,8 +106,8 @@ async def api_list_user_memos(request: Request) -> JSONResponse:
     category = request.query_params.get("category") or None
 
     # この画面は「特定ユーザーのメモ」を見るので is_admin は使わず user で絞る。
-    total = count_memos_db(name, category=category)
-    memos = list_memos_db(
+    total = count_memos_service(name, category=category)
+    memos = list_memos_service(
         name, limit=per_page, offset=(page - 1) * per_page, category=category
     )
     total_pages = (total + per_page - 1) // per_page if total else 0
@@ -135,14 +136,16 @@ async def api_create_user_memo(request: Request) -> JSONResponse:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
 
     body = await request.json()
-    title = str(body.get("title", "")).strip()
-    if not title:
-        return JSONResponse({"error": "title is required"}, status_code=400)
-    summary = str(body.get("summary", "")).strip()
-    # 省略時は repository が OTHERS に正規化する。
+    # title 必須チェックと trim は service 側 (TitleRequired)。category 省略時は
+    # repository が OTHERS に正規化する。
+    title = str(body.get("title", ""))
+    summary = str(body.get("summary", ""))
     category = body.get("category")
     category = category if isinstance(category, str) else None
-    memo = create_memo_db(name, title, summary, category)
+    try:
+        memo = create_memo_service(name, title, summary, category)
+    except TitleRequired:
+        return JSONResponse({"error": "title is required"}, status_code=400)
     return JSONResponse(memo, status_code=201)
 
 
@@ -156,20 +159,19 @@ async def api_update_user_memo(request: Request) -> JSONResponse:
     memo_id = request.path_params["memo_id"]
 
     body = await request.json()
+    # 文字列でないフィールドは None = 「変更しない」。trim と空 title 拒否
+    # (TitleRequired) は service 側。category の空文字=OTHERS は repository が解釈する。
     title = body.get("title")
-    if isinstance(title, str):
-        title = title.strip()
-        if not title:
-            return JSONResponse({"error": "title is required"}, status_code=400)
-    else:
-        title = None  # 省略 → 変更しない
+    title = title if isinstance(title, str) else None
     summary = body.get("summary")
-    summary = summary.strip() if isinstance(summary, str) else None
-    # category 省略 → 変更しない。文字列が来たら repository が正規化する。
+    summary = summary if isinstance(summary, str) else None
     category = body.get("category")
     category = category if isinstance(category, str) else None
 
-    memo = update_memo_db(name, memo_id, title, summary, category=category)
+    try:
+        memo = update_memo_service(name, memo_id, title, summary, category=category)
+    except TitleRequired:
+        return JSONResponse({"error": "title is required"}, status_code=400)
     if memo is None:
         return JSONResponse(
             {"error": f"memo id={memo_id} not found"}, status_code=404
@@ -181,7 +183,7 @@ async def api_delete_user_memo(request: Request) -> JSONResponse:
     """指定ユーザーのメモを削除する。そのユーザーが所有するメモのみ (無ければ 404)。"""
     name = request.path_params["name"]
     memo_id = request.path_params["memo_id"]
-    if not delete_memo_db(name, memo_id):
+    if not delete_memo_service(name, memo_id):
         return JSONResponse(
             {"error": f"memo id={memo_id} not found"}, status_code=404
         )

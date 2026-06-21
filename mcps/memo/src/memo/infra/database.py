@@ -23,7 +23,7 @@ DB_PATH = Path(
 ADMIN_USER = "admin"
 
 #: カテゴリ未指定のメモが属する既定カテゴリ。カテゴリ名は大文字に正規化して
-#: 保存・照合する (repository.memo.normalize_category) ため、この定数も大文字。
+#: 保存・照合する (repository.category.normalize_category) ため、この定数も大文字。
 OTHERS_CATEGORY = "OTHERS"
 
 

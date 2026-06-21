@@ -12,7 +12,8 @@
 
 import sqlite3
 
-from memo.infra.database import OTHERS_CATEGORY, _connect_db
+from memo.infra.database import _connect_db
+from memo.repository.category import normalize_category
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -25,20 +26,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
-
-
-def normalize_category(category: str | None) -> str:
-    """カテゴリ名を正規化する: 前後の空白を除去し大文字化する。
-
-    ``None`` や空文字 (空白のみ含む) は既定カテゴリ ``OTHERS`` に寄せる。
-    大文字化することで ``work`` / ``Work`` / ``WORK`` を同一カテゴリとして
-    保存・照合できる。書き込み (create/update) と検索フィルタの両方がこの
-    ヘルパーを通すので、保存値と絞り込み条件が必ず一致する。
-    """
-    if category is None:
-        return OTHERS_CATEGORY
-    normalized = category.strip().upper()
-    return normalized or OTHERS_CATEGORY
 
 
 def _scope(memo_id: int, user: str, is_admin: bool) -> tuple[str, list]:
@@ -139,23 +126,6 @@ def count_memos_db(
     with _connect_db() as db:
         row = db.execute(f"SELECT COUNT(*) AS n FROM memos {where}", params).fetchone()
     return row["n"]
-
-
-def list_categories_db(user: str, is_admin: bool = False) -> list[str]:
-    """ユーザーのメモが持つカテゴリ一覧を重複なく名前順に返す。
-
-    通常は ``user`` のメモが属するカテゴリだけ。``is_admin=True`` なら全ユーザー
-    (``user=''`` の孤立メモ含む) のカテゴリ。メモが1件も無ければ空リスト。
-    カテゴリは保存時に正規化済み (大文字) なので、ここでの再正規化は不要。
-    """
-    clauses, params = _base_filter(user, is_admin, None)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    with _connect_db() as db:
-        rows = db.execute(
-            f"SELECT DISTINCT category FROM memos {where} ORDER BY category",
-            params,
-        ).fetchall()
-    return [r["category"] for r in rows]
 
 
 def _escape_like(keyword: str) -> str:
