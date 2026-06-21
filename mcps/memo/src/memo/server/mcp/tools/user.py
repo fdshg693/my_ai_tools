@@ -13,7 +13,7 @@ import json
 
 from fastmcp import Context
 
-from memo.repository.user import is_registered_user
+from memo.repository.user import get_user_db
 from memo.service.category import list_categories
 from memo.server.mcp.admin_tools import ADMIN_TOOL_TAG, apply_session_visibility
 from memo.server.mcp.app import mcp
@@ -25,7 +25,7 @@ from memo.server.mcp.auth import (
 )
 from memo.server.mcp.authz import ADMIN_ONLY_ERROR, resolve_caller
 from memo.service.user import (
-    CannotDeleteAdmin,
+    CannotDeleteLastAdmin,
     NameRequired,
     UserAlreadyExists,
     UserNotFound,
@@ -54,10 +54,10 @@ def _dump(obj) -> str:
 )
 def create_user(name: str, display_name: str = "", note: str = "") -> str:
     """is_admin を確認し service.user.create_user を呼ぶ。ドメイン例外をメッセージに変換。"""
-    _user, is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    if not is_admin:
+    if not caller["is_admin"]:
         return ADMIN_ONLY_ERROR
     try:
         created = create_user_service(name, display_name, note)
@@ -77,10 +77,10 @@ def create_user(name: str, display_name: str = "", note: str = "") -> str:
 )
 def list_users() -> str:
     """is_admin を確認し service.user.list_users を返す。"""
-    _user, is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    if not is_admin:
+    if not caller["is_admin"]:
         return ADMIN_ONLY_ERROR
     users = list_users_service()
     if not users:
@@ -98,10 +98,10 @@ def list_users() -> str:
 )
 def get_user(name: str) -> str:
     """is_admin を確認し service.user.get_user を呼ぶ。UserNotFound をメッセージに変換。"""
-    _user, is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    if not is_admin:
+    if not caller["is_admin"]:
         return ADMIN_ONLY_ERROR
     try:
         user = get_user_service(name)
@@ -122,10 +122,10 @@ def get_user(name: str) -> str:
 )
 def update_user(name: str, display_name: str | None = None, note: str | None = None) -> str:
     """is_admin を確認し service.user.update_user を呼ぶ。name は不変、None=変更しない。"""
-    _user, is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    if not is_admin:
+    if not caller["is_admin"]:
         return ADMIN_ONLY_ERROR
     try:
         update_user_service(name, display_name, note)
@@ -138,23 +138,23 @@ def update_user(name: str, display_name: str | None = None, note: str | None = N
     description=(
         "(admin 専用) ユーザーを台帳から削除する。以後そのユーザーは接続できない。\n\n"
         "name : 削除するユーザー名。\n"
-        "そのユーザーのメモは削除せず残す (以後は admin だけが操作できる)。\n"
-        "特権ユーザー admin 自身は削除できない。"
+        "そのユーザーのメモ・カテゴリ・埋め込みも一緒に削除される (カスケード)。\n"
+        "最後の1人の管理者は削除できない (管理者が居なくなるのを防ぐ)。"
     ),
     tags={ADMIN_TOOL_TAG},
 )
 def delete_user(name: str) -> str:
     """is_admin を確認し service.user.delete_user を呼ぶ。admin 不可ガードは service 側。"""
-    _user, is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    if not is_admin:
+    if not caller["is_admin"]:
         return ADMIN_ONLY_ERROR
     name = name.strip()
     try:
         delete_user_service(name)
-    except CannotDeleteAdmin as e:
-        return f"Error: cannot delete the admin user '{e.name}'."
+    except CannotDeleteLastAdmin as e:
+        return f"Error: cannot delete the last admin user '{e.name}'."
     except UserNotFound:
         return f"User '{name}' not found."
     return f"Deleted user '{name}'."
@@ -166,11 +166,11 @@ def delete_user(name: str) -> str:
         "target : 切り替え先のユーザー名 (users 台帳に登録済みであること)。\n"
         "stdio では以後この接続のメモ操作が target のものになる (サーバー再起動は不要)。\n"
         "HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと\n"
-        "切り替え状態を保持できない)。admin への切り替えも可能。\n"
+        "切り替え状態を保持できない)。管理者ユーザーへの切り替えも可能。\n"
         "成功時は、切り替え先ユーザーが持つカテゴリ一覧も併せて返す\n"
         "(メモ作成や、検索・一覧の category 絞り込みの手掛かりになる)。\n"
-        "admin に切り替えると、この接続だけでユーザー管理ツールが有効化される\n"
-        "(無効化されている場合あり。env MEMO_ADMIN_TOOLS_AUTO_ENABLE)。"
+        "管理者 (is_admin) のユーザーに切り替えると、この接続だけでユーザー管理ツールが\n"
+        "有効化される (無効化されている場合あり。env MEMO_ADMIN_TOOLS_AUTO_ENABLE)。"
     )
 )
 async def switch_user(target: str, ctx: Context) -> str:
@@ -181,17 +181,18 @@ async def switch_user(target: str, ctx: Context) -> str:
     ツールの可視性を ``apply_session_visibility`` で更新する (admin → 有効化、
     admin 以外 → 無効化)。FastMCP がこの変更で list_changed をクライアントへ自動送信する。
     """
-    _user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
     target = target.strip()
     if not target:
         return "Error: target is required."
-    if not is_registered_user(target):
+    target_user = get_user_db(target)
+    if target_user is None:
         return f"Error: user '{target}' is not registered."
 
-    # 切り替え先ユーザーが持つカテゴリ一覧を添える (カテゴリはユーザー単位)。
-    categories = [c["name"] for c in list_categories(target)]
+    # 切り替え先ユーザーが持つカテゴリ一覧を添える (カテゴリはユーザー単位・id 紐付け)。
+    categories = [c["name"] for c in list_categories(target_user["id"])]
     cat_note = (
         "カテゴリ: " + ", ".join(categories)
         if categories
@@ -213,5 +214,6 @@ async def switch_user(target: str, ctx: Context) -> str:
         suffix = f" (client_id={client_id})"
 
     # この接続だけ admin タグのツールの可視性を切り替える (セッションレベル可視性)。
-    await apply_session_visibility(ctx, target)
+    # 管理者判定は名前ではなく切り替え先の is_admin フラグで行う。
+    await apply_session_visibility(ctx, target_user["is_admin"])
     return f"Switched user to '{target}'{suffix}. {cat_note}"

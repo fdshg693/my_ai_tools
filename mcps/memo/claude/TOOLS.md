@@ -31,15 +31,15 @@ Categories are per-user (see [features/category.md](features/category.md)). MCP 
 
 ## User management tools (admin-only)
 
-These 5 tools are tagged `admin` and their visibility is controlled by FastMCP's **Component Visibility** API (see [features/user.md](features/user.md) and `server/mcp/admin_tools.py`): they are **disabled at the server level by default**, so a fresh session does not list them and calling one by name returns `Unknown tool`. They become visible/callable **only after `switch_user("admin")`** on that connection (per-session enable), and only while the auto-enable switch `MEMO_ADMIN_TOOLS_AUTO_ENABLE` is on (set it falsy — `0`/`false`/`no`/`off` — to keep them disabled even for `admin`). Switching to a non-admin re-hides them. Behind this each tool still returns an `admin-only` error unless the caller is `admin` (defense in depth).
+These 5 tools are tagged `admin` and their visibility is controlled by FastMCP's **Component Visibility** API (see [features/user.md](features/user.md) and `server/mcp/admin_tools.py`): they are **disabled at the server level by default**, so a fresh session does not list them and calling one by name returns `Unknown tool`. They become visible/callable **only after switching to a user whose `is_admin` flag is set** (per-session enable), and only while the auto-enable switch `MEMO_ADMIN_TOOLS_AUTO_ENABLE` is on (set it falsy — `0`/`false`/`no`/`off` — to keep them disabled even for admins). Switching to a non-admin re-hides them. Behind this each tool still returns an `admin-only` error unless the caller's `is_admin` is set (defense in depth). **Admin status is the `users.is_admin` flag, not the user's name** — `admin` is just the default seeded admin (`is_admin=1`).
 
 | Tool | Args | Behavior |
 |------|------|----------|
-| `create_user` | `name`, `display_name=""`, `note=""` | Register a user. `name` required, unique identifier. Returns a no-op message if it already exists. |
-| `get_user` | `name` | Fetch one user. |
+| `create_user` | `name`, `display_name=""`, `note=""` | Register a (non-admin) user. `name` required, unique. Returns a no-op message if it already exists. **`is_admin` is not settable over MCP** — grant admin from the `memo-admin` web UI. |
+| `get_user` | `name` | Fetch one user (includes `id` / `is_admin`). |
 | `list_users` | — | List registered users by name. |
-| `update_user` | `name`, `display_name=None`, `note=None` | Update attributes (display name / note). `name` (identifier) is immutable. |
-| `delete_user` | `name` | Remove a user from the ledger (memos kept). `admin` itself cannot be deleted. |
+| `update_user` | `name`, `display_name=None`, `note=None` | Update attributes (display name / note). `name` is immutable, and **`is_admin` cannot be changed over MCP** (web UI only). |
+| `delete_user` | `name` | Remove a user (their memos/categories/embeddings cascade-delete). **The last remaining admin cannot be deleted.** |
 
 ## Session tool (not admin-only)
 

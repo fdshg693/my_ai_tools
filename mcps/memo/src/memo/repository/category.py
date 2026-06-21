@@ -1,8 +1,9 @@
 """カテゴリのデータアクセス (正規化ルール + ユーザーごとの第一級カテゴリ台帳)。
 
 カテゴリは ``categories`` テーブルでユーザーごとに管理される第一級の実体。
-``(user, name)`` で一意で、メモは自分の登録済みカテゴリにしか紐づけられない
-(その検証は service 層が ``category_exists_db`` を使って行う)。
+``(user_id, name)`` で一意で、メモは自分の登録済みカテゴリにしか紐づけられない
+(その検証は service 層が ``category_exists_db`` を使って行う)。所有者は不変の
+``user_id`` で持つため、ユーザー名 (name) を変更してもこの層の更新は不要。
 
 ``repository.memo`` がここの ``normalize_category`` を取り込む (memo → category の
 一方向依存)。循環参照を避けるため、ここでは ``repository.memo`` を一切 import せず、
@@ -37,48 +38,48 @@ def normalize_category(category: str | None) -> str:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
-        "user": row["user"],
+        "user_id": row["user_id"],
         "name": row["name"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
 
 
-def list_categories_db(user: str) -> list[dict]:
+def list_categories_db(user_id: int) -> list[dict]:
     """ユーザーのカテゴリ一覧を名前順に返す (``categories`` テーブル参照)。
 
-    カテゴリはユーザー単位なので、常に ``user`` のものだけを返す。
-    各要素は id / user / name / created_at / updated_at を持つ dict。
+    カテゴリはユーザー単位なので、常に ``user_id`` のものだけを返す。
+    各要素は id / user_id / name / created_at / updated_at を持つ dict。
     """
     with _connect_db() as db:
         rows = db.execute(
-            "SELECT * FROM categories WHERE user = ? ORDER BY name",
-            (user,),
+            "SELECT * FROM categories WHERE user_id = ? ORDER BY name",
+            (user_id,),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
-def get_category_db(user: str, category_id: int) -> dict | None:
+def get_category_db(user_id: int, category_id: int) -> dict | None:
     """id でカテゴリを1件取得する (そのユーザーのものに限る)。無ければ None。"""
     with _connect_db() as db:
         row = db.execute(
-            "SELECT * FROM categories WHERE id = ? AND user = ?",
-            (category_id, user),
+            "SELECT * FROM categories WHERE id = ? AND user_id = ?",
+            (category_id, user_id),
         ).fetchone()
     return _row_to_dict(row) if row else None
 
 
-def category_exists_db(user: str, name: str) -> bool:
-    """``user`` が ``name`` のカテゴリを持っていれば True (正規化して照合)。"""
+def category_exists_db(user_id: int, name: str) -> bool:
+    """``user_id`` が ``name`` のカテゴリを持っていれば True (正規化して照合)。"""
     with _connect_db() as db:
         row = db.execute(
-            "SELECT 1 FROM categories WHERE user = ? AND name = ?",
-            (user, normalize_category(name)),
+            "SELECT 1 FROM categories WHERE user_id = ? AND name = ?",
+            (user_id, normalize_category(name)),
         ).fetchone()
     return row is not None
 
 
-def create_category_db(user: str, name: str) -> dict | None:
+def create_category_db(user_id: int, name: str) -> dict | None:
     """カテゴリを新規作成し、作成レコードを返す。
 
     ``name`` は ``normalize_category`` で正規化する。同名 (正規化後) が既に
@@ -87,14 +88,14 @@ def create_category_db(user: str, name: str) -> dict | None:
     normalized = normalize_category(name)
     with _connect_db() as db:
         exists = db.execute(
-            "SELECT 1 FROM categories WHERE user = ? AND name = ?",
-            (user, normalized),
+            "SELECT 1 FROM categories WHERE user_id = ? AND name = ?",
+            (user_id, normalized),
         ).fetchone()
         if exists:
             return None
         cursor = db.execute(
-            "INSERT INTO categories (user, name) VALUES (?, ?)",
-            (user, normalized),
+            "INSERT INTO categories (user_id, name) VALUES (?, ?)",
+            (user_id, normalized),
         )
         row = db.execute(
             "SELECT * FROM categories WHERE id = ?", (cursor.lastrowid,)
@@ -102,19 +103,19 @@ def create_category_db(user: str, name: str) -> dict | None:
     return _row_to_dict(row)
 
 
-def ensure_default_category_db(user: str) -> None:
-    """``user`` に既定カテゴリ ``OTHERS`` を保証する (冪等)。
+def ensure_default_category_db(user_id: int) -> None:
+    """``user_id`` に既定カテゴリ ``OTHERS`` を保証する (冪等)。
 
     新規ユーザー作成時に呼び、最低でも OTHERS を1つ持たせる。
     """
     with _connect_db() as db:
         db.execute(
-            "INSERT OR IGNORE INTO categories (user, name) VALUES (?, ?)",
-            (user, OTHERS_CATEGORY),
+            "INSERT OR IGNORE INTO categories (user_id, name) VALUES (?, ?)",
+            (user_id, OTHERS_CATEGORY),
         )
 
 
-def rename_category_db(user: str, old_name: str, new_name: str) -> None:
+def rename_category_db(user_id: int, old_name: str, new_name: str) -> None:
     """カテゴリ名を変更する。紐づくメモのカテゴリはトリガーが追従させる。
 
     ``categories`` 行を1つリネームするだけ。``memos.category`` の付け替えは
@@ -127,12 +128,12 @@ def rename_category_db(user: str, old_name: str, new_name: str) -> None:
     with _connect_db() as db:
         db.execute(
             "UPDATE categories SET name = ?, updated_at = datetime('now') "
-            "WHERE user = ? AND name = ?",
-            (new, user, old),
+            "WHERE user_id = ? AND name = ?",
+            (new, user_id, old),
         )
 
 
-def delete_category_db(user: str, name: str) -> None:
+def delete_category_db(user_id: int, name: str) -> None:
     """カテゴリを削除する。紐づくメモは既定 ``OTHERS`` へトリガーが付け替える。
 
     ``categories`` 行を1つ削除するだけ。紐づくメモの ``OTHERS`` への付け替えは
@@ -142,6 +143,6 @@ def delete_category_db(user: str, name: str) -> None:
     target = normalize_category(name)
     with _connect_db() as db:
         db.execute(
-            "DELETE FROM categories WHERE user = ? AND name = ?",
-            (user, target),
+            "DELETE FROM categories WHERE user_id = ? AND name = ?",
+            (user_id, target),
         )

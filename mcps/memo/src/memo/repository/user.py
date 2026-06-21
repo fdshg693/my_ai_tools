@@ -1,8 +1,11 @@
 """ユーザー台帳 (``users`` テーブル) のデータアクセス。
 
-``name`` は不変の識別子 (PK)。``display_name`` / ``note`` は編集可能な属性。
-接続を許可してよいかの判定 (``is_registered_user``) もここで提供する
-(認可ロジック自体は ``memo.authz`` がこれを使って組み立てる)。
+``id`` が不変の識別子 (PK)。メモ・カテゴリは ``id`` (``user_id``) に紐づくため、
+``name`` を変更しても下位データの更新は不要。``name`` は一意のログインハンドル、
+``display_name`` / ``note`` は編集可能な属性、``is_admin`` は名前から独立した
+管理者権限フラグ (Python 側では bool)。接続を許可してよいかの判定
+(``is_registered_user``) もここで提供する (認可ロジック自体は ``memo.authz`` が
+これを使って組み立てる)。
 
 ユーザーを削除すると、そのユーザーのメモ (``memos``)・カテゴリ
 (``categories``)・埋め込みキャッシュ (``memo_embeddings``) も一緒に消えるが、
@@ -18,9 +21,11 @@ from memo.infra.database import _connect_db
 
 def _user_row_to_dict(row: sqlite3.Row) -> dict:
     return {
+        "id": row["id"],
         "name": row["name"],
         "display_name": row["display_name"],
         "note": row["note"],
+        "is_admin": bool(row["is_admin"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -33,18 +38,28 @@ def is_registered_user(name: str) -> bool:
     return row is not None
 
 
-def create_user_db(name: str, display_name: str = "", note: str = "") -> dict | None:
+def count_admins_db() -> int:
+    """``is_admin`` が立っているユーザー数を返す (最後の管理者保護に使う)。"""
+    with _connect_db() as db:
+        row = db.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1").fetchone()
+    return row["n"]
+
+
+def create_user_db(
+    name: str, display_name: str = "", note: str = "", is_admin: bool = False
+) -> dict | None:
     """ユーザーを新規登録し、作成したレコードを返す。
 
     同名のユーザーが既に存在する場合は None を返す (重複登録を防ぐ)。
+    ``is_admin`` で管理者権限を付けて作成できる。
     """
     with _connect_db() as db:
         exists = db.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone()
         if exists:
             return None
         db.execute(
-            "INSERT INTO users (name, display_name, note) VALUES (?, ?, ?)",
-            (name, display_name, note),
+            "INSERT INTO users (name, display_name, note, is_admin) VALUES (?, ?, ?, ?)",
+            (name, display_name, note, 1 if is_admin else 0),
         )
         row = db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
     return _user_row_to_dict(row)
@@ -65,12 +80,16 @@ def list_users_db() -> list[dict]:
 
 
 def update_user_db(
-    name: str, display_name: str | None = None, note: str | None = None
+    name: str,
+    display_name: str | None = None,
+    note: str | None = None,
+    is_admin: bool | None = None,
 ) -> dict | None:
-    """ユーザーの属性 (display_name / note) を更新する。
+    """ユーザーの属性 (display_name / note / is_admin) を更新する。
 
-    name (識別子) は変更しない。対象が存在しなければ None。
-    display_name と note が両方 None の場合は更新せず既存レコードを返す。
+    name (ログインハンドル) は変更しない。対象が存在しなければ None。
+    すべて None の場合は更新せず既存レコードを返す。``is_admin`` は ``None`` で
+    「変更しない」、bool で管理者権限を付与/剥奪する。
     """
     with _connect_db() as db:
         row = db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
@@ -85,6 +104,9 @@ def update_user_db(
         if note is not None:
             fields.append("note = ?")
             params.append(note)
+        if is_admin is not None:
+            fields.append("is_admin = ?")
+            params.append(1 if is_admin else 0)
 
         if fields:
             fields.append("updated_at = datetime('now')")

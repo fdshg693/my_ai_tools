@@ -47,11 +47,12 @@ def create_memo(title: str, summary: str = "", category: str = "") -> str:
     title 必須 (空なら ``TitleRequired``)・未登録カテゴリ拒否 (``UnknownCategory``)・
     category 正規化 (空→OTHERS) は service / repository 側で行う。
     """
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
+    user_id = caller["id"]
     try:
-        memo = create_memo_service(user, title, summary, category)
+        memo = create_memo_service(user_id, title, summary, category)
     except TitleRequired:
         return "Error: title is required."
     except UnknownCategory as e:
@@ -69,10 +70,11 @@ def create_memo(title: str, summary: str = "", category: str = "") -> str:
 )
 def get_memo(memo_id: int) -> str:
     """接続ユーザー自身のメモのみ取得する。"""
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    memo = get_memo_service(user, memo_id)
+    user_id = caller["id"]
+    memo = get_memo_service(user_id, memo_id)
     if memo is None:
         return f"Memo id={memo_id} not found."
     return _dump(memo)
@@ -90,10 +92,11 @@ def get_memo(memo_id: int) -> str:
 )
 def list_memos(limit: int = 50, category: str = "") -> str:
     """category.strip() or None を filter として渡す (接続ユーザーのメモのみ)。"""
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    memos = list_memos_service(user, limit, category=category.strip() or None)
+    user_id = caller["id"]
+    memos = list_memos_service(user_id, limit, category=category.strip() or None)
     if not memos:
         return "No memos found."
     return _dump(memos)
@@ -114,9 +117,10 @@ def list_memos(limit: int = 50, category: str = "") -> str:
 )
 def search_memos(query: str, limit: int = 50, category: str = "") -> str:
     """query をカンマ分割し重複除去したキーワード列で部分一致検索 (service 経由)。"""
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
+    user_id = caller["id"]
     seen: set[str] = set()
     keywords: list[str] = []
     for part in query.split(","):
@@ -127,7 +131,7 @@ def search_memos(query: str, limit: int = 50, category: str = "") -> str:
     if not keywords:
         return "Error: query is required."
     memos = search_memos_service(
-        user, keywords, limit, category=category.strip() or None
+        user_id, keywords, limit, category=category.strip() or None
     )
     if not memos:
         return f"No memos matched any of: {', '.join(keywords)}."
@@ -153,15 +157,16 @@ def semantic_search_memos(query: str, limit: int = 5, category: str = "") -> str
 
     network を伴うのはこの経路のみ (repository は SQLite のみ)。
     """
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
+    user_id = caller["id"]
     query = query.strip()
     if not query:
         return "Error: query is required."
     try:
         results = semantic_search(
-            user, query, limit, category=category.strip() or None
+            user_id, query, limit, category=category.strip() or None
         )
     except EmbeddingError as e:
         return f"Error: {e}"
@@ -193,12 +198,13 @@ def update_memo(
     拒否 (UnknownCategory)・trim は service、category の None=変更しない /
     空文字=OTHERS は repository 側。接続ユーザー自身のメモのみ更新する。
     """
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
+    user_id = caller["id"]
     try:
         memo = update_memo_service(
-            user,
+            user_id,
             memo_id,
             title,
             summary,
@@ -222,10 +228,11 @@ def update_memo(
 )
 def delete_memo(memo_id: int) -> str:
     """接続ユーザー自身のメモのみ削除する。"""
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    deleted = delete_memo_service(user, memo_id)
+    user_id = caller["id"]
+    deleted = delete_memo_service(user_id, memo_id)
     if not deleted:
         return f"Memo id={memo_id} not found."
     return f"Deleted memo id={memo_id}."

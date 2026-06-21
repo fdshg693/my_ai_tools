@@ -20,7 +20,7 @@ from memo.infra.database import ADMIN_USER
 from memo.infra.embedding import EmbeddingError
 from memo.repository.category import create_category_db
 from memo.repository.memo import create_memo_db
-from memo.repository.user import create_user_db
+from memo.repository.user import create_user_db, get_user_db
 from memo.server.mcp import auth as auth_module
 from memo.server.mcp.app import mcp  # init_db() はモジュール読み込み時に実行される
 from memo.server.mcp.auth import set_stdio_user
@@ -50,6 +50,21 @@ NON_ADMIN_TOOLS = {
 }
 
 EXPECTED_TOOLS = NON_ADMIN_TOOLS | ADMIN_TOOLS
+
+
+def _uid(name: str) -> int:
+    """登録済みユーザー名から不変の user_id を引く (メモ/カテゴリ作成用)。"""
+    return get_user_db(name)["id"]
+
+
+def _memo(name: str, *args, **kwargs) -> dict:
+    """名前で所有者を指定してメモを作る (内部では user_id に解決する)。"""
+    return create_memo_db(_uid(name), *args, **kwargs)
+
+
+def _cat(name: str, *args, **kwargs):
+    """名前で所有者を指定してカテゴリを作る (内部では user_id に解決する)。"""
+    return create_category_db(_uid(name), *args, **kwargs)
 
 
 class _DummyRequest:
@@ -128,6 +143,18 @@ def test_switch_to_admin_enables_admin_tools():
     set_stdio_user(ADMIN_USER)
     try:
         names = asyncio.run(_switch_then_list(ADMIN_USER))
+    finally:
+        set_stdio_user(None)
+    assert EXPECTED_TOOLS <= names
+
+
+def test_flag_admin_with_other_name_enables_admin_tools():
+    # 管理者判定は名前ではなく is_admin フラグ。"admin" 以外の名前でも is_admin なら
+    # 切り替え先セッションで管理ツールが公開される。
+    create_user_db("root", is_admin=True)
+    set_stdio_user(ADMIN_USER)
+    try:
+        names = asyncio.run(_switch_then_list("root"))
     finally:
         set_stdio_user(None)
     assert EXPECTED_TOOLS <= names
@@ -279,7 +306,7 @@ def test_admin_tool_stays_uncallable_when_auto_enable_disabled(monkeypatch):
 def test_admin_cannot_see_other_users_memos():
     # admin は通常ユーザーと同じく自分のメモしか見えない (完全分離)。
     create_user_db("alice")
-    create_memo_db("alice", "alice の会議メモ", "")
+    _memo("alice", "alice の会議メモ", "")
     set_stdio_user(ADMIN_USER)
     try:
         listed = asyncio.run(_call("list_memos", {}))
@@ -298,7 +325,8 @@ def test_admin_can_create_user():
     assert result == "Created user 'newbie'."
 
 
-def test_admin_cannot_delete_self():
+def test_admin_cannot_delete_last_admin():
+    # admin は唯一の管理者 (最後の1人) なので削除できない
     set_stdio_user(ADMIN_USER)
     try:
         result = asyncio.run(
@@ -306,7 +334,7 @@ def test_admin_cannot_delete_self():
         )
     finally:
         set_stdio_user(None)
-    assert "cannot delete the admin user" in result
+    assert "cannot delete the last admin user" in result
 
 
 def test_semantic_search_returns_ranked_results(monkeypatch):
@@ -318,8 +346,8 @@ def test_semantic_search_returns_ranked_results(monkeypatch):
     }
     monkeypatch.setattr(service, "embed_text", lambda t: vectors.get(t, [0.0, 0.0]))
     create_user_db("alice")
-    create_memo_db("alice", "ペットメモ", "犬と猫")
-    create_memo_db("alice", "投資メモ", "株の話")
+    _memo("alice", "ペットメモ", "犬と猫")
+    _memo("alice", "投資メモ", "株の話")
     set_stdio_user("alice")
     try:
         result = asyncio.run(_call("semantic_search_memos", {"query": "ペットについて"}))
@@ -338,7 +366,7 @@ def test_semantic_search_reports_embedding_error(monkeypatch):
 
     monkeypatch.setattr(service, "embed_text", _boom)
     create_user_db("alice")
-    create_memo_db("alice", "メモ", "本文")
+    _memo("alice", "メモ", "本文")
     set_stdio_user("alice")
     try:
         result = asyncio.run(_call("semantic_search_memos", {"query": "x"}))
@@ -368,8 +396,8 @@ def test_switch_user_stdio_changes_owner():
 def test_switch_user_returns_target_categories():
     create_user_db("alice")
     # 切り替え先 alice が持つカテゴリが切り替え結果に含まれる
-    create_category_db("alice", "work")
-    create_category_db("alice", "private")
+    _cat("alice", "work")
+    _cat("alice", "private")
     set_stdio_user(ADMIN_USER)
     try:
         switched = asyncio.run(_call("switch_user", {"target": "alice"}))

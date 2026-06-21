@@ -122,6 +122,12 @@ td input { width: 100%; padding: 6px 8px; font-size: 0.9rem; }
 .id-col { width: 1%; white-space: nowrap; }
 td.summary { color: var(--text-secondary); }
 
+.admin-col { width: 1%; white-space: nowrap; text-align: center; }
+td.admin-cell { text-align: center; }
+td.admin-cell input { width: auto; }
+.row .checkbox { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; white-space: nowrap; font-size: 0.9rem; color: var(--text-secondary); }
+.row .checkbox input { flex: 0 0 auto; width: auto; }
+
 /* メモのカテゴリ表示 (一覧のバッジ) と絞り込み欄 */
 .cat-badge {
   display: inline-block;

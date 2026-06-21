@@ -15,14 +15,11 @@ from memo.repository.embedding import (
 from memo.repository.memo import create_memo_db
 from memo.repository.user import create_user_db
 
-ALICE = "alice"
-
-
 @pytest.fixture
 def memo_id(clean_tables):
     """埋め込みの紐づけ先となる実メモを1件作り、その id を返す。"""
-    create_user_db(ALICE)
-    return create_memo_db(ALICE, "embedding 対象メモ")["id"]
+    alice_id = create_user_db("alice")["id"]
+    return create_memo_db(alice_id, "embedding 対象メモ")["id"]
 
 
 def test_get_missing_returns_none():

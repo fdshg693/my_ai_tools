@@ -55,7 +55,7 @@ class UnknownCategory(MemoError):
         super().__init__(f"category '{category}' is not registered")
 
 
-def _require_known_category(user: str, category: str | None) -> None:
+def _require_known_category(user_id: int, category: str | None) -> None:
     """``category`` がそのユーザーの登録済みカテゴリであることを確認する。
 
     正規化後が ``OTHERS`` (既定・常に存在) の場合は検証不要。それ以外で
@@ -64,14 +64,14 @@ def _require_known_category(user: str, category: str | None) -> None:
     normalized = normalize_category(category)
     if normalized == OTHERS_CATEGORY:
         return
-    if not category_exists_db(user, normalized):
+    if not category_exists_db(user_id, normalized):
         raise UnknownCategory(normalized)
 
 
 def create_memo(
-    user: str, title: str, summary: str = "", category: str | None = None
+    user_id: int, title: str, summary: str = "", category: str | None = None
 ) -> dict:
-    """メモを新規作成して作成レコードを返す。所有者は ``user``。
+    """メモを新規作成して作成レコードを返す。所有者は ``user_id``。
 
     ``title`` 必須 (trim 後に空なら ``TitleRequired``)。``summary`` は trim する。
     ``category`` は repository が正規化する (未指定/空 → ``OTHERS``)。指定カテゴリ
@@ -80,42 +80,42 @@ def create_memo(
     title = title.strip()
     if not title:
         raise TitleRequired()
-    _require_known_category(user, category)
-    return create_memo_db(user, title, summary.strip(), category)
+    _require_known_category(user_id, category)
+    return create_memo_db(user_id, title, summary.strip(), category)
 
 
-def get_memo(user: str, memo_id: int) -> dict | None:
+def get_memo(user_id: int, memo_id: int) -> dict | None:
     """ID でメモを1件取得する (所有者外/不在は ``None``)。"""
-    return get_memo_db(user, memo_id)
+    return get_memo_db(user_id, memo_id)
 
 
 def list_memos(
-    user: str,
+    user_id: int,
     limit: int = 50,
     offset: int = 0,
     category: str | None = None,
 ) -> list[dict]:
-    """メモを新しい順に取得する (user 絞り込み・category・paging は repository)。"""
-    return list_memos_db(user, limit=limit, offset=offset, category=category)
+    """メモを新しい順に取得する (user_id 絞り込み・category・paging は repository)。"""
+    return list_memos_db(user_id, limit=limit, offset=offset, category=category)
 
 
-def count_memos(user: str, category: str | None = None) -> int:
+def count_memos(user_id: int, category: str | None = None) -> int:
     """メモの総件数を返す (ページング用)。"""
-    return count_memos_db(user, category=category)
+    return count_memos_db(user_id, category=category)
 
 
 def search_memos(
-    user: str,
+    user_id: int,
     keywords: list[str],
     limit: int = 50,
     category: str | None = None,
 ) -> list[dict]:
     """タイトル部分一致でメモを検索する (キーワードの OR、各メモに matched_keywords)。"""
-    return search_memos_db(user, keywords, limit, category=category)
+    return search_memos_db(user_id, keywords, limit, category=category)
 
 
 def update_memo(
-    user: str,
+    user_id: int,
     memo_id: int,
     title: str | None = None,
     summary: str | None = None,
@@ -135,13 +135,13 @@ def update_memo(
     if summary is not None:
         summary = summary.strip()
     if category is not None:
-        _require_known_category(user, category)
-    return update_memo_db(user, memo_id, title, summary, category=category)
+        _require_known_category(user_id, category)
+    return update_memo_db(user_id, memo_id, title, summary, category=category)
 
 
-def delete_memo(user: str, memo_id: int) -> bool:
+def delete_memo(user_id: int, memo_id: int) -> bool:
     """メモを削除する (削除できたら True、対象が無ければ False)。"""
-    return delete_memo_db(user, memo_id)
+    return delete_memo_db(user_id, memo_id)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -171,20 +171,20 @@ def _embedding_for_memo(memo: dict) -> list[float]:
 
 
 def semantic_search(
-    user: str,
+    user_id: int,
     query: str,
     limit: int = 5,
     category: str | None = None,
 ) -> list[dict]:
     """概要 (summary) の意味的な近さでメモを検索し、類似度の高い順に返す。
 
-    ``user`` のメモのみが対象 (user 絞り込みは ``list_memos_db`` に集約)。
+    ``user_id`` のメモのみが対象 (user 絞り込みは ``list_memos_db`` に集約)。
     ``category`` を渡すと同一カテゴリのメモだけを対象にする (``None`` は全カテゴリ)。
     概要が空のメモは対象外。各メモには query との ``similarity`` (0〜1) を付与する。
     埋め込み API の失敗は ``EmbeddingError`` がそのまま伝播する。
     """
     query_vec = embed_text(query)
-    candidates = list_memos_db(user, limit=_CANDIDATE_CAP, category=category)
+    candidates = list_memos_db(user_id, limit=_CANDIDATE_CAP, category=category)
 
     scored: list[dict] = []
     for memo in candidates:

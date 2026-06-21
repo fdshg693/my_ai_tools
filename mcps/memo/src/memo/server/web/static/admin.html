@@ -19,6 +19,7 @@
         <input id="new-name" type="text" placeholder="ユーザー名 (必須・一意)" autocomplete="off" required />
         <input id="new-display" type="text" placeholder="表示名 (任意)" autocomplete="off" />
         <input id="new-note" type="text" placeholder="メモ (任意)" autocomplete="off" />
+        <label class="checkbox" title="管理者権限を付けて作成する"><input id="new-admin" type="checkbox" /> 管理者</label>
         <button type="submit" class="primary">追加</button>
       </form>
     </section>
@@ -34,6 +35,7 @@
             <th>ユーザー名</th>
             <th>表示名</th>
             <th>備考</th>
+            <th class="admin-col">管理者</th>
             <th>作成日時</th>
             <th class="actions-col">操作</th>
           </tr>

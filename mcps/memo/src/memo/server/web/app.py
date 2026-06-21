@@ -6,8 +6,9 @@ MCP サーバー (stdio/http) とは別プロセスで動き、同じ ``memo.db`
 
 層の位置づけ: これはトランスポート端 (Web UI) であり、認可は持たない無認証
 admin 面のまま。ただしユーザー CRUD のドメイン不変条件 (name 必須・trim・部分
-更新・admin 削除禁止) は MCP ツールと共有する ``service.user`` に集約し、ここは
-service のドメイン例外を HTTP ステータスへ翻訳するだけにする。
+更新・最後の管理者の削除/降格禁止) は MCP ツールと共有する ``service.user`` に
+集約し、ここは service のドメイン例外を HTTP ステータスへ翻訳するだけにする。
+``is_admin`` の編集はこの Web UI からのみ行える (MCP ツールでは変更しない)。
 
 セキュリティ: 既定で ``127.0.0.1`` にだけバインドする無認証の admin 専用ツール
 (switch_user 同様、無認証で全ユーザーを操作できる)。``MEMO_ADMIN_HOST`` で広げる
@@ -43,7 +44,8 @@ from memo.service.memo import (
     update_memo as update_memo_service,
 )
 from memo.service.user import (
-    CannotDeleteAdmin,
+    CannotDeleteLastAdmin,
+    CannotDemoteLastAdmin,
     NameRequired,
     UserAlreadyExists,
     UserNotFound,
@@ -107,7 +109,7 @@ async def api_list_user_memos(request: Request) -> JSONResponse:
     """
     name = request.path_params["name"]
     try:
-        get_user(name)  # 存在確認 (無ければ 404)
+        user = get_user(name)  # 存在確認 (無ければ 404)
     except UserNotFound:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
 
@@ -116,10 +118,11 @@ async def api_list_user_memos(request: Request) -> JSONResponse:
     # category クエリがあれば同一カテゴリに絞る (空なら全カテゴリ)。
     category = request.query_params.get("category") or None
 
-    # この画面は「特定ユーザーのメモ」を見るので is_admin は使わず user で絞る。
-    total = count_memos_service(name, category=category)
+    # この画面は「特定ユーザーのメモ」を見るので、不変の user_id で絞る。
+    user_id = user["id"]
+    total = count_memos_service(user_id, category=category)
     memos = list_memos_service(
-        name, limit=per_page, offset=(page - 1) * per_page, category=category
+        user_id, limit=per_page, offset=(page - 1) * per_page, category=category
     )
     total_pages = (total + per_page - 1) // per_page if total else 0
     return JSONResponse(
@@ -142,7 +145,7 @@ async def api_create_user_memo(request: Request) -> JSONResponse:
     """
     name = request.path_params["name"]
     try:
-        get_user(name)  # 存在確認 (無ければ 404)
+        user = get_user(name)  # 存在確認 (無ければ 404)
     except UserNotFound:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
 
@@ -154,7 +157,7 @@ async def api_create_user_memo(request: Request) -> JSONResponse:
     category = body.get("category")
     category = category if isinstance(category, str) else None
     try:
-        memo = create_memo_service(name, title, summary, category)
+        memo = create_memo_service(user["id"], title, summary, category)
     except TitleRequired:
         return JSONResponse({"error": "title is required"}, status_code=400)
     except UnknownCategory as e:
@@ -172,6 +175,10 @@ async def api_update_user_memo(request: Request) -> JSONResponse:
     """
     name = request.path_params["name"]
     memo_id = request.path_params["memo_id"]
+    try:
+        user = get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
 
     body = await request.json()
     # 文字列でないフィールドは None = 「変更しない」。trim と空 title 拒否
@@ -184,7 +191,9 @@ async def api_update_user_memo(request: Request) -> JSONResponse:
     category = category if isinstance(category, str) else None
 
     try:
-        memo = update_memo_service(name, memo_id, title, summary, category=category)
+        memo = update_memo_service(
+            user["id"], memo_id, title, summary, category=category
+        )
     except TitleRequired:
         return JSONResponse({"error": "title is required"}, status_code=400)
     except UnknownCategory as e:
@@ -202,7 +211,11 @@ async def api_delete_user_memo(request: Request) -> JSONResponse:
     """指定ユーザーのメモを削除する。そのユーザーが所有するメモのみ (無ければ 404)。"""
     name = request.path_params["name"]
     memo_id = request.path_params["memo_id"]
-    if not delete_memo_service(name, memo_id):
+    try:
+        user = get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
+    if not delete_memo_service(user["id"], memo_id):
         return JSONResponse(
             {"error": f"memo id={memo_id} not found"}, status_code=404
         )
@@ -216,23 +229,23 @@ async def api_list_user_categories(request: Request) -> JSONResponse:
     """
     name = request.path_params["name"]
     try:
-        get_user(name)  # 存在確認 (無ければ 404)
+        user = get_user(name)  # 存在確認 (無ければ 404)
     except UserNotFound:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
-    return JSONResponse(list_categories_service(name))
+    return JSONResponse(list_categories_service(user["id"]))
 
 
 async def api_create_user_category(request: Request) -> JSONResponse:
     """指定ユーザーのカテゴリを新規作成する。name 必須 (400)・重複 (409)。"""
     name = request.path_params["name"]
     try:
-        get_user(name)  # 存在確認 (無ければ 404)
+        user = get_user(name)  # 存在確認 (無ければ 404)
     except UserNotFound:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
 
     body = await request.json()
     try:
-        created = create_category_service(name, str(body.get("name", "")))
+        created = create_category_service(user["id"], str(body.get("name", "")))
     except CategoryNameRequired:
         return JSONResponse({"error": "name is required"}, status_code=400)
     except CategoryAlreadyExists as e:
@@ -249,10 +262,14 @@ async def api_rename_user_category(request: Request) -> JSONResponse:
     """
     name = request.path_params["name"]
     category_id = request.path_params["category_id"]
+    try:
+        user = get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
     body = await request.json()
     try:
         renamed = rename_category_by_id_service(
-            name, category_id, str(body.get("name", ""))
+            user["id"], category_id, str(body.get("name", ""))
         )
     except CategoryNameRequired:
         return JSONResponse({"error": "name is required"}, status_code=400)
@@ -275,7 +292,11 @@ async def api_delete_user_category(request: Request) -> JSONResponse:
     name = request.path_params["name"]
     category_id = request.path_params["category_id"]
     try:
-        delete_category_by_id_service(name, category_id)
+        user = get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
+    try:
+        delete_category_by_id_service(user["id"], category_id)
     except CannotModifyOthers as e:
         return JSONResponse({"error": str(e)}, status_code=403)
     except CategoryNotFound as e:
@@ -284,13 +305,15 @@ async def api_delete_user_category(request: Request) -> JSONResponse:
 
 
 async def api_create_user(request: Request) -> JSONResponse:
-    """ユーザーを新規登録する。name 必須・重複は 409。"""
+    """ユーザーを新規登録する。name 必須・重複は 409。is_admin で管理者作成も可。"""
     body = await request.json()
+    is_admin = bool(body.get("is_admin", False))
     try:
         created = create_user(
             str(body.get("name", "")),
             str(body.get("display_name", "")),
             str(body.get("note", "")),
+            is_admin,
         )
     except NameRequired:
         return JSONResponse({"error": "name is required"}, status_code=400)
@@ -302,17 +325,28 @@ async def api_create_user(request: Request) -> JSONResponse:
 
 
 async def api_update_user(request: Request) -> JSONResponse:
-    """ユーザーの display_name / note を更新する。name (識別子) は不変。"""
+    """ユーザーの display_name / note / is_admin を更新する。name (ログインハンドル) は不変。
+
+    ``is_admin`` はこの Web UI からのみ編集できる (MCP ツールでは変更しない)。
+    最後の1人の管理者は降格できない (409)。
+    """
     name = request.path_params["name"]
     body = await request.json()
     # 省略されたフィールドは None を渡して「変更しない」を表現する (service が trim する)
     display_name = body.get("display_name")
     note = body.get("note")
+    is_admin = body.get("is_admin")
     try:
         updated = update_user(
             name,
             display_name if isinstance(display_name, str) else None,
             note if isinstance(note, str) else None,
+            bool(is_admin) if is_admin is not None else None,
+        )
+    except CannotDemoteLastAdmin as e:
+        return JSONResponse(
+            {"error": f"cannot remove admin from the last admin user '{e.name}'"},
+            status_code=409,
         )
     except UserNotFound:
         return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
@@ -320,13 +354,13 @@ async def api_update_user(request: Request) -> JSONResponse:
 
 
 async def api_delete_user(request: Request) -> JSONResponse:
-    """ユーザーを台帳から削除する。admin 自身は削除不可 (tools の delete_user と同じガード)。"""
+    """ユーザーを台帳から削除する。最後の1人の管理者は削除不可 (tools の delete_user と同じガード)。"""
     name = request.path_params["name"]
     try:
         delete_user(name)
-    except CannotDeleteAdmin as e:
+    except CannotDeleteLastAdmin as e:
         return JSONResponse(
-            {"error": f"cannot delete the admin user '{e.name}'"},
+            {"error": f"cannot delete the last admin user '{e.name}'"},
             status_code=403,
         )
     except UserNotFound:

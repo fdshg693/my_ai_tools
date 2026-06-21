@@ -8,12 +8,23 @@ import pytest
 from starlette.testclient import TestClient
 
 from memo.repository.memo import create_memo_db
+from memo.repository.user import get_user_db
 from memo.server.web.app import create_app
 
 
 @pytest.fixture
 def client():
     return TestClient(create_app())
+
+
+def _uid(name: str) -> int:
+    """登録済みユーザー名から不変の user_id を引く (メモ作成の所有者指定に使う)。"""
+    return get_user_db(name)["id"]
+
+
+def _memo(name: str, *args, **kwargs) -> dict:
+    """名前で所有者を指定してメモを作る (内部では user_id に解決する)。"""
+    return create_memo_db(_uid(name), *args, **kwargs)
 
 
 def test_list_users_initially_only_admin(client):
@@ -95,10 +106,51 @@ def test_delete_user(client):
 
 
 def test_cannot_delete_admin(client):
+    # admin は唯一の管理者 (最後の1人) なので削除できない
     res = client.delete("/api/users/admin")
     assert res.status_code == 403
     # admin は残っている
     assert client.get("/api/users/admin").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# is_admin (管理者権限フラグ) — Web UI からのみ編集できる
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_defaults_non_admin(client):
+    body = client.post("/api/users", json={"name": "norm"}).json()
+    assert body["is_admin"] is False
+
+
+def test_create_admin_user(client):
+    body = client.post(
+        "/api/users", json={"name": "root", "is_admin": True}
+    ).json()
+    assert body["is_admin"] is True
+
+
+def test_promote_then_demote_user(client):
+    client.post("/api/users", json={"name": "mallory"})
+    promoted = client.put("/api/users/mallory", json={"is_admin": True}).json()
+    assert promoted["is_admin"] is True
+    # 別の管理者がいる間は降格できる
+    demoted = client.put("/api/users/mallory", json={"is_admin": False}).json()
+    assert demoted["is_admin"] is False
+
+
+def test_cannot_demote_last_admin(client):
+    # admin が唯一の管理者の状態で降格しようとすると 409
+    res = client.put("/api/users/admin", json={"is_admin": False})
+    assert res.status_code == 409
+    assert client.get("/api/users/admin").json()["is_admin"] is True
+
+
+def test_can_delete_admin_when_another_admin_exists(client):
+    # 別の管理者を作れば元の admin も削除できる (最後の1人ではなくなる)
+    client.post("/api/users", json={"name": "root", "is_admin": True})
+    res = client.delete("/api/users/admin")
+    assert res.status_code == 200
 
 
 def test_delete_missing_user_404(client):
@@ -136,20 +188,20 @@ def test_list_user_memos_missing_user_404(client):
 def test_list_user_memos_only_that_user(client):
     client.post("/api/users", json={"name": "heidi"})
     client.post("/api/users", json={"name": "ivan"})
-    create_memo_db("heidi", "h-1")
-    create_memo_db("heidi", "h-2")
-    create_memo_db("ivan", "i-1")
+    _memo("heidi", "h-1")
+    _memo("heidi", "h-2")
+    _memo("ivan", "i-1")
 
     body = client.get("/api/users/heidi/memos").json()
     assert body["total"] == 2
     assert {m["title"] for m in body["items"]} == {"h-1", "h-2"}
-    assert all(m["user"] == "heidi" for m in body["items"])
+    assert all(m["user_id"] == _uid("heidi") for m in body["items"])
 
 
 def test_list_user_memos_pagination(client):
     client.post("/api/users", json={"name": "judy"})
     for i in range(5):
-        create_memo_db("judy", f"memo-{i}")
+        _memo("judy", f"memo-{i}")
 
     page1 = client.get("/api/users/judy/memos?page=1&per_page=2").json()
     assert page1["total"] == 5
@@ -173,7 +225,7 @@ def test_list_user_memos_per_page_capped(client):
 
 def test_list_user_memos_invalid_params_fallback(client):
     client.post("/api/users", json={"name": "leo"})
-    create_memo_db("leo", "only")
+    _memo("leo", "only")
     body = client.get("/api/users/leo/memos?page=abc&per_page=xyz").json()
     assert body["page"] == 1
     assert body["per_page"] == 20  # DEFAULT_PER_PAGE
@@ -193,7 +245,7 @@ def test_create_user_memo(client):
     body = res.json()
     assert body["title"] == "T"
     assert body["summary"] == "S"
-    assert body["user"] == "mona"  # 所有者はパスのユーザーに固定
+    assert body["user_id"] == _uid("mona")  # 所有者はパスのユーザーに固定
 
     # 一覧に反映される
     listing = client.get("/api/users/mona/memos").json()
@@ -222,7 +274,7 @@ def test_create_user_memo_missing_user_404(client):
 
 def test_update_user_memo(client):
     client.post("/api/users", json={"name": "pam"})
-    memo = create_memo_db("pam", "old", "old-summary")
+    memo = _memo("pam", "old", "old-summary")
     res = client.put(
         f"/api/users/pam/memos/{memo['id']}",
         json={"title": "new", "summary": "new-summary"},
@@ -235,7 +287,7 @@ def test_update_user_memo(client):
 
 def test_update_user_memo_partial(client):
     client.post("/api/users", json={"name": "quinn"})
-    memo = create_memo_db("quinn", "keep", "keep-summary")
+    memo = _memo("quinn", "keep", "keep-summary")
     # summary だけ更新。title 省略 → 変更しない
     res = client.put(
         f"/api/users/quinn/memos/{memo['id']}", json={"summary": "changed"}
@@ -248,7 +300,7 @@ def test_update_user_memo_partial(client):
 
 def test_update_user_memo_rejects_empty_title(client):
     client.post("/api/users", json={"name": "rita"})
-    memo = create_memo_db("rita", "title")
+    memo = _memo("rita", "title")
     res = client.put(f"/api/users/rita/memos/{memo['id']}", json={"title": "  "})
     assert res.status_code == 400
 
@@ -256,7 +308,7 @@ def test_update_user_memo_rejects_empty_title(client):
 def test_update_user_memo_other_user_404(client):
     client.post("/api/users", json={"name": "sam"})
     client.post("/api/users", json={"name": "tina"})
-    memo = create_memo_db("tina", "tina-memo")
+    memo = _memo("tina", "tina-memo")
     # sam のパスで tina のメモを更新しようとしても見つからない (完全分離)
     res = client.put(
         f"/api/users/sam/memos/{memo['id']}", json={"title": "hack"}
@@ -275,7 +327,7 @@ def test_update_user_memo_missing_404(client):
 
 def test_delete_user_memo(client):
     client.post("/api/users", json={"name": "vic"})
-    memo = create_memo_db("vic", "to-delete")
+    memo = _memo("vic", "to-delete")
     res = client.delete(f"/api/users/vic/memos/{memo['id']}")
     assert res.status_code == 200
     assert res.json()["deleted"] == memo["id"]
@@ -285,7 +337,7 @@ def test_delete_user_memo(client):
 def test_delete_user_memo_other_user_404(client):
     client.post("/api/users", json={"name": "wes"})
     client.post("/api/users", json={"name": "xena"})
-    memo = create_memo_db("xena", "xena-memo")
+    memo = _memo("xena", "xena-memo")
     res = client.delete(f"/api/users/wes/memos/{memo['id']}")
     assert res.status_code == 404
     # xena のメモは残っている
@@ -331,7 +383,7 @@ def test_create_user_memo_rejects_unregistered_category(client):
 def test_update_user_memo_category(client):
     client.post("/api/users", json={"name": "cat-c"})
     client.post("/api/users/cat-c/categories", json={"name": "private"})
-    memo = create_memo_db("cat-c", "T", "", category="work")
+    memo = _memo("cat-c", "T", "", category="work")
     res = client.put(
         f"/api/users/cat-c/memos/{memo['id']}", json={"category": "private"}
     )
@@ -341,9 +393,9 @@ def test_update_user_memo_category(client):
 
 def test_list_user_memos_filters_by_category(client):
     client.post("/api/users", json={"name": "cat-d"})
-    create_memo_db("cat-d", "w1", "", category="work")
-    create_memo_db("cat-d", "p1", "", category="private")
-    create_memo_db("cat-d", "o1")  # OTHERS
+    _memo("cat-d", "w1", "", category="work")
+    _memo("cat-d", "p1", "", category="private")
+    _memo("cat-d", "o1")  # OTHERS
 
     work = client.get("/api/users/cat-d/memos?category=work").json()
     assert work["total"] == 1

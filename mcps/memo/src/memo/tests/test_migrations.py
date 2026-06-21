@@ -63,6 +63,7 @@ def _legacy_db() -> sqlite3.Connection:
 
 def _seed_legacy(db: sqlite3.Connection) -> None:
     """alice の正常データ + 孤立データ (所有者不明メモ・実体無し埋め込み) を入れる。"""
+    db.execute("INSERT INTO users (name) VALUES ('admin')")
     db.execute("INSERT INTO users (name) VALUES ('alice')")
     db.execute("INSERT INTO categories (user, name) VALUES ('alice', 'WORK')")
     db.execute("INSERT INTO memos (id, user, title, category) VALUES (1, 'alice', 'm', 'WORK')")
@@ -137,14 +138,54 @@ def test_preserves_valid_data():
     db = _legacy_db()
     _seed_legacy(db)
     run_migrations(db)
-    row = db.execute("SELECT user, title, category FROM memos WHERE id = 1").fetchone()
+    # m002 後は user_id ベース。所有者名は users との JOIN で確認する。
+    row = db.execute(
+        "SELECT u.name, m.title, m.category FROM memos m "
+        "JOIN users u ON m.user_id = u.id WHERE m.id = 1"
+    ).fetchone()
     assert row == ("alice", "m", "WORK")
     db.close()
 
 
 # ---------------------------------------------------------------------------
-# m001: カスケード (外部キー + トリガー) が移行後に効く
+# m002: ユーザー id 化 + is_admin
 # ---------------------------------------------------------------------------
+
+
+def _alice_id(db: sqlite3.Connection) -> int:
+    return db.execute("SELECT id FROM users WHERE name = 'alice'").fetchone()[0]
+
+
+def test_user_id_columns_after_migration():
+    db = _legacy_db()
+    _seed_legacy(db)
+    run_migrations(db)
+    user_cols = {r[1] for r in db.execute("PRAGMA table_info(users)")}
+    memo_cols = {r[1] for r in db.execute("PRAGMA table_info(memos)")}
+    cat_cols = {r[1] for r in db.execute("PRAGMA table_info(categories)")}
+    assert "id" in user_cols and "is_admin" in user_cols
+    assert "user_id" in memo_cols and "user" not in memo_cols
+    assert "user_id" in cat_cols and "user" not in cat_cols
+    db.close()
+
+
+def test_existing_admin_is_flagged():
+    db = _legacy_db()
+    _seed_legacy(db)
+    run_migrations(db)
+    # 既存 admin 行は is_admin=1、それ以外は 0
+    assert db.execute("SELECT is_admin FROM users WHERE name='admin'").fetchone()[0] == 1
+    assert db.execute("SELECT is_admin FROM users WHERE name='alice'").fetchone()[0] == 0
+    db.close()
+
+
+def test_memos_retied_to_user_id():
+    db = _legacy_db()
+    _seed_legacy(db)
+    run_migrations(db)
+    # メモ 1 は alice の id に紐づく
+    assert db.execute("SELECT user_id FROM memos WHERE id=1").fetchone()[0] == _alice_id(db)
+    db.close()
 
 
 def test_user_delete_cascades_after_migration():
@@ -154,6 +195,7 @@ def test_user_delete_cascades_after_migration():
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("DELETE FROM users WHERE name = 'alice'")
     assert db.execute("SELECT COUNT(*) FROM memos").fetchone()[0] == 0
+    # alice のカテゴリは消える (admin のカテゴリは無いので全体 0)
     assert db.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0
     db.close()
 
@@ -163,7 +205,10 @@ def test_category_rename_trigger_after_migration():
     _seed_legacy(db)
     run_migrations(db)
     db.execute("PRAGMA foreign_keys=ON")
-    db.execute("UPDATE categories SET name = 'JOB' WHERE user = 'alice' AND name = 'WORK'")
+    db.execute(
+        "UPDATE categories SET name = 'JOB' WHERE user_id = ? AND name = 'WORK'",
+        (_alice_id(db),),
+    )
     cat = db.execute("SELECT category FROM memos WHERE id = 1").fetchone()[0]
     assert cat == "JOB"
     db.close()
@@ -174,7 +219,10 @@ def test_category_delete_trigger_reassigns_after_migration():
     _seed_legacy(db)
     run_migrations(db)
     db.execute("PRAGMA foreign_keys=ON")
-    db.execute("DELETE FROM categories WHERE user = 'alice' AND name = 'WORK'")
+    db.execute(
+        "DELETE FROM categories WHERE user_id = ? AND name = 'WORK'",
+        (_alice_id(db),),
+    )
     cat = db.execute("SELECT category FROM memos WHERE id = 1").fetchone()[0]
     assert cat == "OTHERS"
     db.close()

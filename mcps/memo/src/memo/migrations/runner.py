@@ -15,7 +15,7 @@
 import sqlite3
 from collections.abc import Callable
 
-from memo.migrations import m001_foreign_keys
+from memo.migrations import m001_foreign_keys, m002_user_id
 
 # (version, description, migrate_func) を昇順で並べる。
 _MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
@@ -23,6 +23,11 @@ _MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
         m001_foreign_keys.VERSION,
         m001_foreign_keys.DESCRIPTION,
         m001_foreign_keys.migrate,
+    ),
+    (
+        m002_user_id.VERSION,
+        m002_user_id.DESCRIPTION,
+        m002_user_id.migrate,
     ),
 ]
 

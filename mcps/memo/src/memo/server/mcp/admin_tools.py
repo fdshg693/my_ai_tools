@@ -26,8 +26,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from memo.infra.database import ADMIN_USER
-
 #: パッケージルート (mcps/memo) の .env。embedding.py と同じ方針でここ固定で読み込む。
 #: __file__ = mcps/memo/src/memo/server/mcp/admin_tools.py → parents[4] = mcps/memo
 _ENV_PATH = Path(__file__).resolve().parents[4] / ".env"
@@ -63,14 +61,15 @@ def apply_server_default(mcp) -> None:
     mcp.disable(tags={ADMIN_TOOL_TAG})
 
 
-async def apply_session_visibility(ctx, current_user: str) -> None:
+async def apply_session_visibility(ctx, is_admin: bool) -> None:
     """``switch_user`` 後に、この接続だけ admin タグのツールの可視性を切り替える。
 
-    現在ユーザーが admin かつ自動有効化が有効なら有効化、そうでなければ無効化する
-    (admin から離れたら隠す)。``ctx.enable_components`` / ``disable_components`` は
-    ``list_changed`` 通知をクライアントへ自動送信する。
+    切り替え先ユーザーの ``is_admin`` が立っていて自動有効化が有効なら有効化、
+    そうでなければ無効化する (管理者でなくなったら隠す)。管理者判定は名前ではなく
+    ``users.is_admin`` フラグで行う。``ctx.enable_components`` / ``disable_components``
+    は ``list_changed`` 通知をクライアントへ自動送信する。
     """
-    if current_user == ADMIN_USER and admin_tools_auto_enable():
+    if is_admin and admin_tools_auto_enable():
         await ctx.enable_components(tags={ADMIN_TOOL_TAG})
     else:
         await ctx.disable_components(tags={ADMIN_TOOL_TAG})

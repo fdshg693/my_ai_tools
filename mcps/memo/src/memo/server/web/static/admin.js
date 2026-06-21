@@ -1,8 +1,10 @@
 "use strict";
 
 // memo ユーザー管理画面のロジック。/api/users の REST を叩いて一覧・追加・編集・削除する。
-
-const ADMIN_USER = "admin"; // admin は削除不可 (サーバー側でもガードされる)
+//
+// 管理者かどうかは名前ではなく user.is_admin フラグで判定する。is_admin の編集は
+// この Web UI だけが行える (MCP ツールでは変更しない)。最後の1人の管理者は
+// 削除/降格できない (サーバー側でガードし 403/409 を返す)。
 
 const rowsEl = document.getElementById("user-rows");
 const emptyEl = document.getElementById("empty");
@@ -45,20 +47,21 @@ function escapeHtml(s) {
 
 function renderRow(user) {
   const tr = document.createElement("tr");
-  const isAdmin = user.name === ADMIN_USER;
+  const isAdmin = !!user.is_admin;
   tr.dataset.name = user.name;
   tr.innerHTML = `
     <td>
       <span class="name">${escapeHtml(user.name)}</span>
-      ${isAdmin ? '<span class="badge">特権</span>' : ""}
+      ${isAdmin ? '<span class="badge">管理者</span>' : ""}
     </td>
     <td><input class="edit-display" value="${escapeHtml(user.display_name)}" placeholder="(なし)" /></td>
     <td><input class="edit-note" value="${escapeHtml(user.note)}" placeholder="(なし)" /></td>
+    <td class="admin-cell"><input type="checkbox" class="edit-admin"${isAdmin ? " checked" : ""} /></td>
     <td class="muted">${escapeHtml(user.created_at)}</td>
     <td class="actions">
       <button type="button" class="link memo-btn">メモ</button>
       <button type="button" class="link save-btn">保存</button>
-      ${isAdmin ? "" : '<button type="button" class="link danger delete-btn">削除</button>'}
+      <button type="button" class="link danger delete-btn">削除</button>
     </td>
   `;
 
@@ -67,30 +70,29 @@ function renderRow(user) {
   tr.querySelector(".save-btn").addEventListener("click", async () => {
     const display_name = tr.querySelector(".edit-display").value;
     const note = tr.querySelector(".edit-note").value;
+    const is_admin = tr.querySelector(".edit-admin").checked;
     try {
       await api(`/api/users/${encodeURIComponent(user.name)}`, {
         method: "PUT",
-        body: JSON.stringify({ display_name, note }),
+        body: JSON.stringify({ display_name, note, is_admin }),
       });
       showToast(`「${user.name}」を更新しました`);
+      loadUsers();
     } catch (e) {
       showToast(e.message, true);
     }
   });
 
-  const deleteBtn = tr.querySelector(".delete-btn");
-  if (deleteBtn) {
-    deleteBtn.addEventListener("click", async () => {
-      if (!confirm(`ユーザー「${user.name}」を削除しますか？\n(このユーザーのメモは残ります)`)) return;
-      try {
-        await api(`/api/users/${encodeURIComponent(user.name)}`, { method: "DELETE" });
-        showToast(`「${user.name}」を削除しました`);
-        loadUsers();
-      } catch (e) {
-        showToast(e.message, true);
-      }
-    });
-  }
+  tr.querySelector(".delete-btn").addEventListener("click", async () => {
+    if (!confirm(`ユーザー「${user.name}」を削除しますか？\n(このユーザーのメモも一緒に削除されます)`)) return;
+    try {
+      await api(`/api/users/${encodeURIComponent(user.name)}`, { method: "DELETE" });
+      showToast(`「${user.name}」を削除しました`);
+      loadUsers();
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  });
 
   return tr;
 }
@@ -449,6 +451,7 @@ document.getElementById("create-form").addEventListener("submit", async (ev) => 
   const name = document.getElementById("new-name").value.trim();
   const display_name = document.getElementById("new-display").value.trim();
   const note = document.getElementById("new-note").value.trim();
+  const is_admin = document.getElementById("new-admin").checked;
   if (!name) {
     showToast("ユーザー名は必須です", true);
     return;
@@ -456,7 +459,7 @@ document.getElementById("create-form").addEventListener("submit", async (ev) => 
   try {
     await api("/api/users", {
       method: "POST",
-      body: JSON.stringify({ name, display_name, note }),
+      body: JSON.stringify({ name, display_name, note, is_admin }),
     });
     showToast(`「${name}」を追加しました`);
     ev.target.reset();

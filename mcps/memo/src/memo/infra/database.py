@@ -33,7 +33,10 @@ DB_PATH = Path(
     os.environ.get("MEMO_DB_PATH", str(Path(__file__).parent.parent / "memo.db"))
 )
 
-#: 全ユーザーのメモを操作できる特権ユーザー名。init_db() で必ずシードされる。
+#: ブートストラップ用の既定管理者ユーザー名。init_db() で必ずシードされ、
+#: ``is_admin=1`` が付与される。**管理者権限は名前ではなく ``users.is_admin``
+#: フラグで判定する** (この名前は「最初に作る管理者」の既定名にすぎず、
+#: ほかのユーザーも is_admin を立てれば管理者になれる)。
 ADMIN_USER = "admin"
 
 #: カテゴリ未指定のメモが属する既定カテゴリ。カテゴリ名は大文字に正規化して
@@ -48,37 +51,40 @@ def _create_schema(db: sqlite3.Connection) -> None:
     存在するため ``CREATE TABLE IF NOT EXISTS`` は no-op となり、マイグレーション
     (``memo.migrations``) が外部キー付きへ作り替える。
     """
+    # ``id`` が不変の識別子 (PK)。``name`` は一意のログインハンドルだが可変属性。
+    # ``is_admin`` は名前から独立した管理者権限フラグ (1=管理者)。
     db.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            name         TEXT PRIMARY KEY,
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL UNIQUE,
             display_name TEXT NOT NULL DEFAULT '',
             note         TEXT NOT NULL DEFAULT '',
+            is_admin     INTEGER NOT NULL DEFAULT 0,
             created_at   TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    # ユーザーごとのカテゴリ台帳 (第一級の実体)。(user, name) で一意。
-    # user は users(name) を参照し、ユーザー削除でカスケード削除される。
+    # ユーザーごとのカテゴリ台帳 (第一級の実体)。(user_id, name) で一意。
+    # user_id は users(id) を参照し、ユーザー削除でカスケード削除される
+    # (id は不変なので ON UPDATE CASCADE は不要)。
     db.execute("""
         CREATE TABLE IF NOT EXISTS categories (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user       TEXT NOT NULL REFERENCES users(name)
-                       ON DELETE CASCADE ON UPDATE CASCADE,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             name       TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(user, name)
+            UNIQUE(user_id, name)
         )
     """)
-    db.execute("CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user)")
-    # メモ本体。user は users(name) を参照しユーザー削除でカスケード削除される。
+    # メモ本体。user_id は users(id) を参照しユーザー削除でカスケード削除される。
+    # メモは ID に紐づくので、ユーザー名 (name) を変更してもメモの更新は不要。
     # category は文字列のまま (登録済みカテゴリかの検証は service 層)。カテゴリ
     # 名のリネーム/削除への追従はトリガー (_create_triggers) が行う。
     db.execute(f"""
         CREATE TABLE IF NOT EXISTS memos (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user       TEXT NOT NULL REFERENCES users(name)
-                       ON DELETE CASCADE ON UPDATE CASCADE,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             title      TEXT NOT NULL,
             summary    TEXT NOT NULL DEFAULT '',
             category   TEXT NOT NULL DEFAULT '{OTHERS_CATEGORY}',
@@ -86,7 +92,6 @@ def _create_schema(db: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    db.execute("CREATE INDEX IF NOT EXISTS idx_memos_user ON memos(user)")
     # セマンティック検索用の埋め込みベクトルキャッシュ。memo_id ごとに1行。
     # memo_id は memos(id) を参照し、メモ削除でカスケード削除される。
     db.execute("""
@@ -98,16 +103,39 @@ def _create_schema(db: sqlite3.Connection) -> None:
             created_at   TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    _create_triggers(db)
+    # トリガーは現行 (user_id 参照) 定義。新規 DB (categories が user_id を持つ)
+    # でだけ作る。既存 (name ベース) DB ではテーブル作り替え前にこれを入れると
+    # マイグレーション中の categories 操作で user_id 参照トリガーが発火して壊れる
+    # ため、ここでは作らずマイグレーション (m001=name 版 → m002=user_id 版) に任せる。
+    if _has_column(db, "categories", "user_id"):
+        _create_triggers(db)
+
+
+def _has_column(db: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(r[1] == column for r in db.execute(f"PRAGMA table_info({table})"))
+
+
+def _create_indexes(db: sqlite3.Connection) -> None:
+    """所有者 (``user_id``) のインデックスを作る (冪等)。
+
+    マイグレーション後に呼ぶ: 既存 (name ベース) DB では ``user_id`` 列が
+    マイグレーション完了後に初めて生えるため、``_create_schema`` ではなく
+    ``init_db`` のマイグレーション後にここで作成する。新規 DB でも同様に作る。
+    """
+    db.execute("CREATE INDEX IF NOT EXISTS idx_memos_user_id ON memos(user_id)")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id)"
+    )
 
 
 def _create_triggers(db: sqlite3.Connection) -> None:
     """カテゴリ変更をメモ (``memos.category`` 文字列) へ同期するトリガーを作る (冪等)。
 
-    カテゴリは ``(user, name)`` 文字列でメモから参照されており、リネーム時の
+    カテゴリは ``(user_id, name)`` でメモから参照されており、リネーム時の
     付け替えと削除時の「ユーザーごとの ``OTHERS`` へ戻す」振る舞いは標準の
     外部キーアクションでは表せない (削除先が行ごとに動的)。そこでトリガーで
-    DB 側に持たせ、アプリの手動カスケードをなくす。
+    DB 側に持たせ、アプリの手動カスケードをなくす。メモは ``user_id`` で
+    所有者を持つので、トリガーも ``user_id`` で同一ユーザーのメモを絞る。
     """
     # リネーム: カテゴリ名が変わったら、そのユーザーの同名メモを新名へ付け替える。
     db.execute("""
@@ -116,7 +144,7 @@ def _create_triggers(db: sqlite3.Connection) -> None:
         FOR EACH ROW WHEN OLD.name <> NEW.name
         BEGIN
             UPDATE memos SET category = NEW.name, updated_at = datetime('now')
-            WHERE user = NEW.user AND category = OLD.name;
+            WHERE user_id = NEW.user_id AND category = OLD.name;
         END
     """)
     # 削除: カテゴリ削除前に、紐づくメモを既定 OTHERS へ付け替える (OTHERS 自体は
@@ -128,7 +156,7 @@ def _create_triggers(db: sqlite3.Connection) -> None:
         FOR EACH ROW WHEN OLD.name <> '{OTHERS_CATEGORY}'
         BEGIN
             UPDATE memos SET category = '{OTHERS_CATEGORY}', updated_at = datetime('now')
-            WHERE user = OLD.user AND category = OLD.name;
+            WHERE user_id = OLD.user_id AND category = OLD.name;
         END
     """)
 
@@ -136,22 +164,22 @@ def _create_triggers(db: sqlite3.Connection) -> None:
 def _seed(db: sqlite3.Connection) -> None:
     """ブートストラップ用のシード (冪等)。
 
-    - ユーザー管理用 ``admin`` を必ず用意する。admin はユーザー台帳を CRUD
-      できるだけの通常ユーザーで、他人のメモは操作しない。
+    - 既定管理者 ``admin`` (``is_admin=1``) を必ず用意する。管理者は
+      ユーザー台帳を CRUD できるだけで、他人のメモは操作しない。
     - 全ユーザーへ既定カテゴリ ``OTHERS`` をシードし、既存メモが持つ
-      ``(user, category)`` をカテゴリとして後埋めする (既存メモを有効に保つ)。
+      ``(user_id, category)`` をカテゴリとして後埋めする (既存メモを有効に保つ)。
     """
     db.execute(
-        "INSERT OR IGNORE INTO users (name, display_name) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO users (name, display_name, is_admin) VALUES (?, ?, 1)",
         (ADMIN_USER, "Administrator"),
     )
     db.execute(
-        "INSERT OR IGNORE INTO categories (user, name) "
-        f"SELECT name, '{OTHERS_CATEGORY}' FROM users"
+        "INSERT OR IGNORE INTO categories (user_id, name) "
+        f"SELECT id, '{OTHERS_CATEGORY}' FROM users"
     )
     db.execute(
-        "INSERT OR IGNORE INTO categories (user, name) "
-        "SELECT DISTINCT user, category FROM memos"
+        "INSERT OR IGNORE INTO categories (user_id, name) "
+        "SELECT DISTINCT user_id, category FROM memos"
     )
 
 
@@ -172,6 +200,7 @@ def init_db() -> None:
         db.execute("PRAGMA foreign_keys=ON")
         _create_schema(db)
         run_migrations(db)
+        _create_indexes(db)
         _seed(db)
     finally:
         db.close()

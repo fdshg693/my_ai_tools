@@ -42,11 +42,12 @@ def create_category(name: str) -> str:
 
     name 必須 (空なら CategoryNameRequired) と正規化は service / repository 側。
     """
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
+    user_id = caller["id"]
     try:
-        created = create_category_service(user, name)
+        created = create_category_service(user_id, name)
     except CategoryNameRequired:
         return "Error: name is required."
     except CategoryAlreadyExists as e:
@@ -63,10 +64,11 @@ def create_category(name: str) -> str:
 )
 def list_categories() -> str:
     """接続ユーザーのカテゴリ一覧を返す (カテゴリはユーザー単位)。"""
-    user, _is_admin, error = resolve_caller()
+    caller, error = resolve_caller()
     if error:
         return error
-    categories = list_categories_service(user)
+    user_id = caller["id"]
+    categories = list_categories_service(user_id)
     if not categories:
         return "No categories found."
     return _dump(categories)

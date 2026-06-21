@@ -57,12 +57,12 @@ class CannotModifyOthers(CategoryError):
         super().__init__(f"cannot modify the default category '{OTHERS_CATEGORY}'")
 
 
-def list_categories(user: str) -> list[dict]:
+def list_categories(user_id: int) -> list[dict]:
     """ユーザーのカテゴリ一覧を名前順に返す (常にそのユーザーのものだけ)。"""
-    return list_categories_db(user)
+    return list_categories_db(user_id)
 
 
-def create_category(user: str, name: str) -> dict:
+def create_category(user_id: int, name: str) -> dict:
     """カテゴリを新規作成して作成レコードを返す。
 
     ``name`` 必須 (空なら ``CategoryNameRequired``)、trim + 正規化 (大文字化)。
@@ -70,13 +70,13 @@ def create_category(user: str, name: str) -> dict:
     """
     if not name or not name.strip():
         raise CategoryNameRequired()
-    created = create_category_db(user, name)
+    created = create_category_db(user_id, name)
     if created is None:
         raise CategoryAlreadyExists(normalize_category(name))
     return created
 
 
-def rename_category(user: str, old_name: str, new_name: str) -> dict:
+def rename_category(user_id: int, old_name: str, new_name: str) -> dict:
     """カテゴリ名を変更し、紐づくメモのカテゴリも追従させる (repository が実施)。
 
     既定カテゴリ ``OTHERS`` は変更不可 (``CannotModifyOthers``)。``old_name`` が
@@ -90,18 +90,18 @@ def rename_category(user: str, old_name: str, new_name: str) -> dict:
         raise CategoryNameRequired()
     new = normalize_category(new_name)
 
-    existing = {c["name"] for c in list_categories_db(user)}
+    existing = {c["name"] for c in list_categories_db(user_id)}
     if old not in existing:
         raise CategoryNotFound(old)
     # 同名へのリネーム (実質変更なし) は許可。別カテゴリと衝突する場合のみ拒否。
     if new != old and new in existing:
         raise CategoryAlreadyExists(new)
 
-    rename_category_db(user, old, new)
-    return {"user": user, "name": new}
+    rename_category_db(user_id, old, new)
+    return {"user_id": user_id, "name": new}
 
 
-def delete_category(user: str, name: str) -> None:
+def delete_category(user_id: int, name: str) -> None:
     """カテゴリを削除する (紐づくメモは ``OTHERS`` へ付け替え)。
 
     既定カテゴリ ``OTHERS`` は削除不可 (``CannotModifyOthers``)。対象が存在
@@ -110,31 +110,31 @@ def delete_category(user: str, name: str) -> None:
     target = normalize_category(name)
     if target == OTHERS_CATEGORY:
         raise CannotModifyOthers()
-    existing = {c["name"] for c in list_categories_db(user)}
+    existing = {c["name"] for c in list_categories_db(user_id)}
     if target not in existing:
         raise CategoryNotFound(target)
-    delete_category_db(user, target)
+    delete_category_db(user_id, target)
 
 
-def rename_category_by_id(user: str, category_id: int, new_name: str) -> dict:
+def rename_category_by_id(user_id: int, category_id: int, new_name: str) -> dict:
     """id 指定でカテゴリをリネームする (Web の id ベース呼び出し用)。
 
     対象 id が存在しなければ ``CategoryNotFound``。それ以外の不変条件は
     ``rename_category`` に委譲する。
     """
-    current = get_category_db(user, category_id)
+    current = get_category_db(user_id, category_id)
     if current is None:
         raise CategoryNotFound(str(category_id))
-    return rename_category(user, current["name"], new_name)
+    return rename_category(user_id, current["name"], new_name)
 
 
-def delete_category_by_id(user: str, category_id: int) -> None:
+def delete_category_by_id(user_id: int, category_id: int) -> None:
     """id 指定でカテゴリを削除する (Web の id ベース呼び出し用)。
 
     対象 id が存在しなければ ``CategoryNotFound``。それ以外の不変条件は
     ``delete_category`` に委譲する。
     """
-    current = get_category_db(user, category_id)
+    current = get_category_db(user_id, category_id)
     if current is None:
         raise CategoryNotFound(str(category_id))
-    delete_category(user, current["name"])
+    delete_category(user_id, current["name"])

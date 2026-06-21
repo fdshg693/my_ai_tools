@@ -1,6 +1,6 @@
 # Feature: Category
 
-Categories are a **first-class, per-user entity** stored in the `categories` table (`(user, name)` unique), not just a string column derived from memos. Every memo still carries a `memos.category` value, but that value must be one of the owning user's registered categories (or the always-present default `OTHERS`). Category names are normalized on write by `repository.category.normalize_category()` — **trim + uppercase**, empty/`None` → `OTHERS` (`OTHERS_CATEGORY` in `infra/database.py`) — so `work` / `Work` / `WORK` are one category and stored values are always canonical uppercase.
+Categories are a **first-class, per-user entity** stored in the `categories` table (`(user_id, name)` unique, owner referenced by the immutable `user_id`), not just a string column derived from memos. Every memo still carries a `memos.category` value, but that value must be one of the owning user's registered categories (or the always-present default `OTHERS`). Category names are normalized on write by `repository.category.normalize_category()` — **trim + uppercase**, empty/`None` → `OTHERS` (`OTHERS_CATEGORY` in `infra/database.py`) — so `work` / `Work` / `WORK` are one category and stored values are always canonical uppercase.
 
 Categories are scoped to the owning user in every operation. `admin` is **not** special for categories: it only manages the `users` ledger and otherwise behaves like a normal user with its own categories (no cross-user category access).
 
@@ -13,7 +13,7 @@ Categories are scoped to the owning user in every operation. `admin` is **not** 
 
 A memo can only be linked to a category its owner has registered. Note this is *not* a DB foreign key: `memos.category` is a denormalized string kept in sync by triggers (the "reassign to the owner's `OTHERS`" delete behavior is per-row dynamic and can't be an FK action — see [SCHEMA.md](../SCHEMA.md)). The "must be registered" rule is therefore an application invariant enforced in **`service.memo`** (the repository stays permissive):
 
-- `create_memo` / `update_memo` call `_require_known_category(user, category)`: the normalized category must be `OTHERS` or exist via `repository.category.category_exists_db(user, name)`, else `UnknownCategory` is raised. Each edge translates it (MCP → `Error: category 'X' is not registered. Create it first.`, web → HTTP 400).
+- `create_memo` / `update_memo` call `_require_known_category(user_id, category)`: the normalized category must be `OTHERS` or exist via `repository.category.category_exists_db(user_id, name)`, else `UnknownCategory` is raised. Each edge translates it (MCP → `Error: category 'X' is not registered. Create it first.`, web → HTTP 400).
 - On `update_memo`, `category=None` means unchanged (no check); `category=""` resets to `OTHERS` (always allowed).
 
 ## Category CRUD
