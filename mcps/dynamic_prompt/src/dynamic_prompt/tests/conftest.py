@@ -1,6 +1,6 @@
 """テスト共通設定。
 
-main.py のモジュールレベル副作用（init_db, start_quiz_server）を安全にするため、
+main.py のモジュールレベル副作用（init_repo, start_quiz_server）を安全にするため、
 テストモジュールのインポートより先にパッチを当てる。
 """
 
@@ -11,11 +11,12 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # 1. DB パスを一時ファイルに差し替え（実 DB を触らないようにする）
+#    全 SQL は repo.sqlite_repo.connection の DB_PATH を参照するため、そこを書き換える。
 # ---------------------------------------------------------------------------
-import dynamic_prompt.database as _db_mod
+from dynamic_prompt.repo.sqlite_repo import connection as _conn_mod
 
 _test_db_dir = tempfile.mkdtemp()
-_db_mod.DB_PATH = Path(_test_db_dir) / "test_vocab.db"
+_conn_mod.DB_PATH = Path(_test_db_dir) / "test_vocab.db"
 
 # ---------------------------------------------------------------------------
 # 2. quiz_server の副作用を無効化（サーバー起動・ポート操作を防ぐ）
@@ -27,9 +28,11 @@ _qs_mod.push_quiz = lambda data: None  # type: ignore[assignment]
 _qs_mod.get_active_port = lambda: 8765  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
-# 3. 初回スキーマ作成（main.py インポート時の init_db はパッチ済み DB に向く）
+# 3. リポジトリを初期化（パッチ済み DB_PATH に向けてスキーマ作成・マイグレーション）
 # ---------------------------------------------------------------------------
-_db_mod.init_db()
+from dynamic_prompt.repo import init_repo
+
+init_repo("sqlite")
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +45,7 @@ _TABLES = ("quiz_questions", "quiz_sessions", "unknown_words", "story_topics", "
 @pytest.fixture(autouse=True)
 def clean_tables():
     """各テストの前にテーブルを空にする（スキーマは保持）。"""
-    with _db_mod._connect_db() as db:
+    with _conn_mod._connect_db() as db:
         for table in _TABLES:
             db.execute(f"DELETE FROM {table}")
     yield

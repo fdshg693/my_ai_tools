@@ -19,7 +19,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from dynamic_prompt.database import get_pending_quiz, save_words_db, submit_quiz_answers
+from dynamic_prompt.repo import get_repo
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ async def sse_endpoint(request: Request):
 
 
 async def pending_quiz(_request: Request) -> JSONResponse:
-    data = get_pending_quiz()
+    data = get_repo().quiz.get_pending()
     return JSONResponse(data if data else {})
 
 
@@ -83,7 +83,7 @@ async def submit_answers(request: Request) -> JSONResponse:
     body = await request.json()
     session_id = body["session_id"]
     answers = body["answers"]
-    result = submit_quiz_answers(session_id, answers)
+    result = get_repo().quiz.submit_answers(session_id, answers)
     return JSONResponse(result)
 
 
@@ -102,7 +102,7 @@ async def save_words(request: Request) -> JSONResponse:
     if not word_list:
         return JSONResponse({"error": "No valid words provided"}, status_code=400)
 
-    saved = save_words_db(lang, word_list, context)
+    saved = get_repo().vocab.save_words(lang, word_list, context)
     return JSONResponse({"saved": saved, "count": len(saved)})
 
 

@@ -63,11 +63,13 @@ def main():
         # コンテナ運用で 0.0.0.0 が要る場合は env HOST=0.0.0.0 を明示し前段に認証を置くこと。
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "8080"))
-        mcp.run(transport="http", host=host, port=port, path="/mcp")
+        # show_banner=False: FastMCP の起動バナー (▀▄█ のロゴ) は stderr に出るだけで
+        # 無害だが、Claude Desktop のログに \uXXXX エスケープとして散らかるので抑制する。
+        mcp.run(transport="http", host=host, port=port, path="/mcp", show_banner=False)
     else:
         # stdio はプロセス全体でユーザーが1人に固定される
         set_stdio_user(args.user)
-        mcp.run(transport="stdio")
+        mcp.run(transport="stdio", show_banner=False)
 
 
 if __name__ == "__main__":

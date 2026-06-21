@@ -1,12 +1,13 @@
 """単語ステータス遷移の単体テスト — _save_word / _process_answer 全パターン。"""
 
-from dynamic_prompt.database import (
+from dynamic_prompt.repo.sqlite_repo import (
     STATUS_MEMORY_TEST,
     STATUS_UNLEARNED,
     STATUS_WRONG,
     _connect_db,
+    _process_answer,
+    _save_word,
 )
-from dynamic_prompt.tools import _process_answer, _save_word
 
 
 # ---------------------------------------------------------------------------

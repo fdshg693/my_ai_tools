@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 # __file__ = mcps/dynamic_prompt/src/dynamic_prompt/main.py → parents[2] = mcps/dynamic_prompt
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
-from dynamic_prompt.database import init_db  # noqa: E402
+from dynamic_prompt.repo import init_repo  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ mcp = FastMCP("dynamic_prompt")
 
 import dynamic_prompt.tools  # noqa: E402, F401 — ツール登録 (side-effect import)
 
-init_db()  # fastmcp run 経由でも確実に実行されるようモジュールレベルで呼ぶ
+init_repo(os.environ.get("DATA_BACKEND", "sqlite"))  # fastmcp run 経由でも確実に実行されるようモジュールレベルで呼ぶ
 
 
 @mcp.custom_route("/health", methods=["GET"])

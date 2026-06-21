@@ -6,21 +6,15 @@ import random
 from dataclasses import asdict
 
 from dynamic_prompt.config import config_store
-from dynamic_prompt.database import (
-    STATUS_MEMORY_TEST,
-    STATUS_UNLEARNED,
-    STATUS_WRONG,
-    _connect_db,
-    get_past_topics_db,
-    get_quiz_results_db,
-    get_unscored_sessions_db,
-    save_quiz_session,
-    save_story_topic_db,
-    score_free_answers_db,
-)
 from dynamic_prompt.main import mcp
 from dynamic_prompt.models import Language
 from dynamic_prompt.quiz_server import get_active_port, push_quiz
+from dynamic_prompt.repo import get_repo
+from dynamic_prompt.repo.sqlite_repo import (
+    STATUS_MEMORY_TEST,
+    STATUS_UNLEARNED,
+    STATUS_WRONG,
+)
 from dynamic_prompt.session import session
 
 
@@ -73,66 +67,6 @@ _STATUS_LABEL = {
     STATUS_WRONG: "needs practice",
     STATUS_MEMORY_TEST: "review",
 }
-
-
-def _save_word(db, lang: str, word: str, context: str) -> str:
-    """単語を保存する。既存ステータスは保持する。"""
-    w = word.strip().lower()
-    if not w:
-        return ""
-    ctx = context.strip() or None
-    db.execute(
-        """INSERT INTO unknown_words (lang, word, context, status)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(lang, word) DO UPDATE SET context = COALESCE(excluded.context, context)""",
-        (lang, w, ctx, STATUS_UNLEARNED),
-    )
-    return w
-
-
-def _process_answer(db, lang: str, word: str, is_correct: bool) -> str:
-    """ステータス遷移を適用し、結果メッセージを返す。"""
-    w = word.strip().lower()
-    row = db.execute(
-        "SELECT status FROM unknown_words WHERE lang = ? AND word = ?",
-        (lang, w),
-    ).fetchone()
-    if row is None:
-        return f"'{word.strip()}': not found"
-
-    status = row["status"]
-
-    if is_correct:
-        if status == STATUS_UNLEARNED:
-            db.execute(
-                "DELETE FROM unknown_words WHERE lang = ? AND word = ?", (lang, w)
-            )
-            return f"'{word.strip()}': correct, removed"
-        if status == STATUS_WRONG:
-            db.execute(
-                "UPDATE unknown_words SET status = ?, reviewed_at = datetime('now') WHERE lang = ? AND word = ?",
-                (STATUS_MEMORY_TEST, lang, w),
-            )
-            return f"'{word.strip()}': correct, moved to review"
-        # memory_test
-        db.execute("DELETE FROM unknown_words WHERE lang = ? AND word = ?", (lang, w))
-        return f"'{word.strip()}': correct, fully learned"
-
-    # incorrect
-    if status == STATUS_UNLEARNED:
-        db.execute(
-            "UPDATE unknown_words SET status = ? WHERE lang = ? AND word = ?",
-            (STATUS_WRONG, lang, w),
-        )
-        return f"'{word.strip()}': incorrect, marked difficult"
-    if status == STATUS_WRONG:
-        return f"'{word.strip()}': incorrect, stays difficult"
-    # memory_test
-    db.execute(
-        "UPDATE unknown_words SET status = ?, reviewed_at = NULL WHERE lang = ? AND word = ?",
-        (STATUS_WRONG, lang, w),
-    )
-    return f"'{word.strip()}': incorrect, back to difficult"
 
 
 # ---------------------------------------------------------------------------
@@ -199,26 +133,7 @@ def get_words() -> str:
     period = config_store.user_config.memory_test_period_hours
     limit = config_store.app_config.vocab_get_limit
 
-    with _connect_db() as db:
-        rows = db.execute(
-            """SELECT word, context, status FROM unknown_words
-               WHERE lang = ?
-                 AND (
-                   status IN (?, ?)
-                   OR (status = ?
-                       AND datetime(reviewed_at, '+' || ? || ' hours') <= datetime('now'))
-                 )
-               ORDER BY RANDOM()
-               LIMIT ?""",
-            (
-                lang,
-                STATUS_UNLEARNED,
-                STATUS_WRONG,
-                STATUS_MEMORY_TEST,
-                str(period),
-                limit,
-            ),
-        ).fetchall()
+    rows = get_repo().vocab.get_review_pool(lang, limit, period)
 
     if not rows:
         return "No words available for review."
@@ -248,12 +163,7 @@ def save_words(words: str, context: str = "") -> str:
     if not items:
         return "No words provided."
 
-    saved = []
-    with _connect_db() as db:
-        for item in items:
-            w = _save_word(db, lang, item, context)
-            if w:
-                saved.append(w)
+    saved = get_repo().vocab.save_words(lang, items, context)
 
     if not saved:
         return "No valid words to save."
@@ -282,12 +192,7 @@ def answer_words(correct: str = "", incorrect: str = "") -> str:
     if not correct_words and not incorrect_words:
         return "No words provided."
 
-    results = []
-    with _connect_db() as db:
-        for w in correct_words:
-            results.append(_process_answer(db, lang, w, True))
-        for w in incorrect_words:
-            results.append(_process_answer(db, lang, w, False))
+    results = get_repo().vocab.process_answers(lang, correct_words, incorrect_words)
 
     return "\n".join(results)
 
@@ -353,7 +258,7 @@ def send_quiz(title: str, questions: str) -> str:
 
     items = _shuffle_choices(items)
 
-    session_id = save_quiz_session(lang, title, items)
+    session_id = get_repo().quiz.create_session(lang, title, items)
 
     quiz_data = {
         "session_id": session_id,
@@ -386,7 +291,7 @@ def get_quiz_results(limit: int = 5) -> str:
     limit : Maximum number of quiz sessions to return (default 5).
     """
     lang = session.lang.code
-    results = get_quiz_results_db(lang, limit)
+    results = get_repo().quiz.get_recent_results(lang, limit)
 
     if not results:
         return "No completed quizzes found."
@@ -462,7 +367,7 @@ def send_free_quiz(title: str, questions: str) -> str:
         }
         for q in items
     ]
-    session_id = save_quiz_session(lang, title, db_items)
+    session_id = get_repo().quiz.create_session(lang, title, db_items)
 
     quiz_data = {
         "session_id": session_id,
@@ -499,7 +404,7 @@ def get_unscored_quizzes(limit: int = 5) -> str:
     limit : Maximum number of sessions to return (default 5).
     """
     lang = session.lang.code
-    sessions = get_unscored_sessions_db(lang, limit)
+    sessions = get_repo().quiz.get_unscored(lang, limit)
 
     if not sessions:
         return "No unscored free-answer quizzes found."
@@ -547,7 +452,7 @@ def score_free_answers(session_id: int, scores: str) -> str:
         if "is_correct" not in s:
             return f"Score {i} missing required field: 'is_correct'."
 
-    result = score_free_answers_db(session_id, items)
+    result = get_repo().quiz.score_free_answers(session_id, items)
     return (
         f"Scored {result['scored_count']} free-answer question(s) for session {session_id}.\n"
         f"Correct: {result['correct_count']}/{result['scored_count']}"
@@ -592,7 +497,7 @@ def get_past_topics(limit: int = 20) -> str:
     limit : Maximum number of past topics to return (default 20, most recent first).
     """
     lang = session.lang.code
-    topics = get_past_topics_db(lang, limit)
+    topics = get_repo().topic.list_recent(lang, limit)
 
     if not topics:
         return "No past topics recorded yet. You are free to choose any topic."
@@ -620,5 +525,5 @@ def save_story_topic(topic: str, summary: str = "") -> str:
     topic_text = topic.strip()
     if not topic_text:
         return "No topic provided."
-    topic_id = save_story_topic_db(lang, topic_text, summary.strip())
+    topic_id = get_repo().topic.save_topic(lang, topic_text, summary.strip())
     return f"Topic saved (id={topic_id}): {topic_text}"

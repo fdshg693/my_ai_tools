@@ -73,8 +73,11 @@ The server exposes 13 MCP tools: `determine_language`, `get_instruction`, `get_w
 | `config_source.py` | `ConfigSource` 抽象 (`LocalConfigSource` / `GCSConfigSource`) と factory。`PROMPTS_URI` で切替 |
 | `config.py` | YAML loading, path constants, TTL キャッシュ付き `ConfigStore` (`config_store` シングルトン)。アクセス時に TTL を確認して自動 refresh |
 | `session.py` | `_Session` class and singleton — holds the current target language |
-| `database.py` | SQLite connection factory (`_connect_db`), `init_db()` (起動時スキーマ初期化), バージョン管理付きマイグレーション (`_MIGRATIONS`), status constants, quiz DB helpers (MC + free-answer), `save_words_db()` (Web UI からの単語保存)。`DB_PATH` は環境変数で上書き可能 |
-| `tools.py` | Variable resolvers, template rendering, vocab helpers, quiz tools (MC + free-answer), story topic tools, and 13 `@mcp.tool` functions |
+| `repo/base.py` | リポジトリ層のインタフェース。`VocabRepo` / `QuizRepo` / `TopicRepo` の Protocol と `RepoBundle` dataclass。バックエンド非依存の抽象 (Phase 1 で導入、Firestore 移行に備える) |
+| `repo/sqlite_repo/` | SQLite 実装パッケージ (責務ごとに分割)。`__init__.py` が全名前を re-export し `build_sqlite_repo()` で `RepoBundle` を構築。`connection.py` (`DB_PATH` / `_connect_db`)、`schema.py` (テーブル定義・マイグレーション `_MIGRATIONS` / `init_db`)、`vocab.py` (単語・復習プール・ステータス遷移 `_save_word` / `_process_answer` + `SqliteVocabRepo`)、`quiz.py` (MC + free クイズ + `SqliteQuizRepo`)、`topic.py` (話題 + `SqliteTopicRepo`)。各サブモジュールの module 関数が SQL の唯一の出所で、`Sqlite*Repo` はその薄い OO ラッパー。`DB_PATH` は `connection.py` が出所で環境変数で上書き可能 |
+| `repo/__init__.py` | `init_repo(backend)` でバックエンド初期化、`get_repo()` でシングルトン `RepoBundle` 取得。`DATA_BACKEND` 環境変数 (既定 `sqlite`) でバックエンド選択 |
+| `database.py` | 後方互換用の薄い shim。`repo/sqlite_repo.py` の旧 API 名を re-export するだけ (既存テスト等の旧 import を維持)。Phase 2-5 で削除予定。新規コードは `get_repo()` を使うこと |
+| `tools.py` | Variable resolvers, template rendering, vocab/quiz/story tools, and 13 `@mcp.tool` functions。DB アクセスは `get_repo()` 経由 |
 | `main.py` | `mcp` FastMCP instance and entry point (`main()`), トランスポート切り替え (`TRANSPORT` 環境変数)、ヘルスチェック (`/health`)、HTTP モード時の OAuth 認証 (`GoogleProvider`)、stdio 時のみ quiz server startup |
 | `quiz_server.py` | Starlette + uvicorn Webサーバー (SSE, REST API, 単語保存API)。デーモンスレッドで起動。ポートプール・グレースフルシャットダウン・古いプロセス自動停止に対応 |
 | `static/quiz.html` | クイズ UI の HTML 構造 |
@@ -186,9 +189,11 @@ Instructions use Python `str.format_map()` with `{variable}` placeholders. Each 
 
 `_Session` (`session.py`) holds the current target language. Tools like `get_instruction` require a language to be set first via `determine_language`.
 
-### Database
+### Repository layer & Database
 
-SQLite with WAL journaling (`vocab.db`). `DB_PATH` は環境変数 `DB_PATH` で上書き可能（デフォルトは `src/dynamic_prompt/vocab.db`）。`init_db()` がサーバー起動時にスキーマ作成・マイグレーションを1回だけ実行する。ツール呼び出しごとにスレッド安全のため新しい接続を返す (`_connect_db`)。
+データアクセスは `repo/` のリポジトリ層で抽象化されている (Phase 1 で導入)。呼び出し側 (`tools.py`, `quiz_server.py`, `main.py`) は `get_repo()` でシングルトン `RepoBundle` (`vocab` / `quiz` / `topic`) を取得し、具体的なバックエンドには依存しない。`main.py` がモジュールレベルで `init_repo(DATA_BACKEND)` を呼び、起動時に初期化する。現状の実装は SQLite のみ (`repo/sqlite_repo.py`)。`database.py` は旧 API を re-export する薄い shim として残っている (Phase 2-5 で削除予定)。
+
+SQLite with WAL journaling (`vocab.db`). `DB_PATH` は環境変数 `DB_PATH` で上書き可能（デフォルトは `src/dynamic_prompt/vocab.db`）。`init_db()` (= `vocab.init()`) がサーバー起動時にスキーマ作成・マイグレーションを1回だけ実行する。ツール呼び出しごとにスレッド安全のため新しい接続を返す (`_connect_db`)。
 
 **マイグレーションシステム**: `schema_version` テーブルでバージョンを管理する。`_MIGRATIONS` リストに `(version, description, func)` タプルを追加するだけで新しいマイグレーションを定義できる。`_migrate()` は未適用のバージョンのみ順番に実行し、冪等性を保証する。新しいマイグレーション追加手順:
 1. `_migration_NNN(db)` 関数を定義
