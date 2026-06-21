@@ -5,6 +5,8 @@
 (メモを OTHERS へ付け替え) を確認する。admin 横断は存在しない (ユーザー単位)。
 """
 
+import pytest
+
 from memo.infra.database import OTHERS_CATEGORY
 from memo.repository.category import (
     category_exists_db,
@@ -17,9 +19,21 @@ from memo.repository.category import (
     rename_category_db,
 )
 from memo.repository.memo import create_memo_db, get_memo_db, list_memos_db
+from memo.repository.user import create_user_db
 
 ALICE = "alice"
 BOB = "bob"
+
+
+@pytest.fixture(autouse=True)
+def _register_owners(clean_tables):
+    """外部キー有効化により、カテゴリ/メモの所有者は users に登録済みであること。
+
+    各テストが使う alice / bob を先に登録する (clean_tables の後に走るよう依存)。
+    既定カテゴリ OTHERS は付けない (各テストが期待するカテゴリ一覧を汚さないため)。
+    """
+    create_user_db(ALICE)
+    create_user_db(BOB)
 
 
 def _names(user):

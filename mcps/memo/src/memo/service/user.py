@@ -113,8 +113,8 @@ def delete_user(name: str) -> None:
     """ユーザーを台帳から削除する。
 
     特権ユーザー ``admin`` は削除禁止 (``CannotDeleteAdmin``)。対象が存在
-    しなければ ``UserNotFound``。そのユーザーのメモ・カテゴリ・埋め込みも
-    repository 側でカスケード削除される (孤立データを残さない)。
+    しなければ ``UserNotFound``。そのユーザーのメモ・カテゴリ・埋め込みは
+    DB の外部キー (ON DELETE CASCADE) が自動で削除する (孤立データを残さない)。
     """
     name = name.strip()
     if name == ADMIN_USER:

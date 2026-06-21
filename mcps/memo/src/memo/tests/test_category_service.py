@@ -19,10 +19,21 @@ from memo.service.category import (
     list_categories,
     rename_category,
 )
+from memo.repository.user import create_user_db
 from memo.service.memo import UnknownCategory, create_memo, get_memo, update_memo
 from memo.service.user import create_user, delete_user
 
 ALICE = "alice"
+
+
+@pytest.fixture(autouse=True)
+def _register_alice(clean_tables):
+    """外部キー有効化により、メモ/カテゴリの所有者 alice を先に登録する。
+
+    OTHERS は付けない (カテゴリ一覧を期待値どおりに保つ)。dave / erin は
+    各テストが service.create_user で登録する。
+    """
+    create_user_db(ALICE)
 
 
 def _names(user):

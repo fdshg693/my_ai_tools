@@ -5,10 +5,10 @@
 (認可ロジック自体は ``memo.authz`` がこれを使って組み立てる)。
 
 ユーザーを削除すると、そのユーザーのメモ (``memos``)・カテゴリ
-(``categories``)・埋め込みキャッシュ (``memo_embeddings``) も一緒に
-カスケード削除する (孤立データを残さない)。これは複数テーブルにまたがる
-削除だが、原子性を優先して1接続のトランザクションで生 SQL を実行する
-(各 repository を経由すると接続が分かれ原子性が崩れるため、ここでまとめる)。
+(``categories``)・埋め込みキャッシュ (``memo_embeddings``) も一緒に消えるが、
+これは **DB の外部キー (ON DELETE CASCADE) が自動で行う** (``infra.database``
+のスキーマ参照)。アプリ側で複数テーブルを手で消すことはしない
+(外部キーは接続ごとに ``PRAGMA foreign_keys=ON`` で有効化済み)。
 """
 
 import sqlite3
@@ -100,21 +100,9 @@ def delete_user_db(name: str) -> bool:
     """ユーザーを台帳から削除する。削除できたら True、対象が無ければ False。
 
     そのユーザーのメモ (memos)・カテゴリ (categories)・埋め込みキャッシュ
-    (memo_embeddings) も一緒に削除する (孤立データを残さない)。すべてを
-    1接続のトランザクションで実行し、整合を保つ。
+    (memo_embeddings) は、外部キーの ON DELETE CASCADE により DB が自動で
+    削除する (孤立データを残さない)。ここでは users 行を1つ消すだけ。
     """
     with _connect_db() as db:
-        exists = db.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone()
-        if exists is None:
-            return False
-        # メモに紐づく埋め込みキャッシュ → メモ → カテゴリ → ユーザーの順に削除
-        db.execute(
-            "DELETE FROM memo_embeddings WHERE memo_id IN "
-            "(SELECT id FROM memos WHERE user = ?)",
-            (name,),
-        )
-        db.execute("DELETE FROM memos WHERE user = ?", (name,))
-        db.execute("DELETE FROM categories WHERE user = ?", (name,))
-        db.execute("DELETE FROM users WHERE name = ?", (name,))
-        db.commit()
-    return True
+        cursor = db.execute("DELETE FROM users WHERE name = ?", (name,))
+        return cursor.rowcount > 0

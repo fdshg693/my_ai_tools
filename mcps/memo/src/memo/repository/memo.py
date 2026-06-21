@@ -204,7 +204,9 @@ def update_memo_db(
 def delete_memo_db(user: str, memo_id: int) -> bool:
     """メモを削除する。削除できたら True、対象が無ければ False。
 
-    ``user`` が所有するメモのみ削除できる (他人のメモは対象外)。
+    ``user`` が所有するメモのみ削除できる (他人のメモは対象外)。紐づく埋め込み
+    キャッシュ (``memo_embeddings``) は外部キーの ON DELETE CASCADE で DB が
+    自動削除する (孤立行を残さない)。
     """
     where, params = _scope(memo_id, user)
     with _connect_db() as db:

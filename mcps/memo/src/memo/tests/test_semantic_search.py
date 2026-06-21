@@ -9,9 +9,17 @@ import pytest
 
 from memo.service import memo as service
 from memo.repository.memo import create_memo_db, update_memo_db
+from memo.repository.user import create_user_db
 
 ALICE = "alice"
 BOB = "bob"
+
+
+@pytest.fixture(autouse=True)
+def _register_owners(clean_tables):
+    """外部キー有効化により、メモ所有者は users に登録済みでなければならない。"""
+    create_user_db(ALICE)
+    create_user_db(BOB)
 
 # 既知の概要 / クエリ → 固定ベクトル。
 # クエリ「ペットについて」と概要「犬と猫のペット」は同方向 (cosine=1.0)、

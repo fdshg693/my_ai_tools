@@ -41,7 +41,7 @@ Because the trigger is `switch_user`, a connection that *started* as `admin` mus
 | POST | `/api/users` | `create_user(name, display_name, note)` | 400 (`NameRequired`); 409 (`UserAlreadyExists`); 201 on success. Seeds the new user's `OTHERS` category |
 | GET | `/api/users/{name}` | `get_user(name)` | 404 (`UserNotFound`) |
 | PUT | `/api/users/{name}` | `update_user(name, display_name, note)` | Omitted fields stay unchanged (sends `None`); `name` immutable; 404 (`UserNotFound`) |
-| DELETE | `/api/users/{name}` | `delete_user(name)` | 403 (`CannotDeleteAdmin`, the guard shared with the `delete_user` tool); 404 (`UserNotFound`). **Cascade-deletes** that user's memos, categories, and embeddings |
+| DELETE | `/api/users/{name}` | `delete_user(name)` | 403 (`CannotDeleteAdmin`, the guard shared with the `delete_user` tool); 404 (`UserNotFound`). **Cascade-deletes** that user's memos, categories, and embeddings via the DB FK `ON DELETE CASCADE` |
 
 **Security**: unauthenticated, same model as `switch_user` — anyone who can reach the port can edit any user incl. `admin`. The default `127.0.0.1` bind keeps it local; `MEMO_ADMIN_HOST=0.0.0.0` logs a warning and must be fronted with real auth.
 

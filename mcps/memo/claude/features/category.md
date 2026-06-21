@@ -11,7 +11,7 @@ Categories are scoped to the owning user in every operation. `admin` is **not** 
 
 ## Memo ⇄ category invariant (validation)
 
-A memo can only be linked to a category its owner has registered. This cross-entity invariant lives in **`service.memo`** (not the repository, which stays permissive):
+A memo can only be linked to a category its owner has registered. Note this is *not* a DB foreign key: `memos.category` is a denormalized string kept in sync by triggers (the "reassign to the owner's `OTHERS`" delete behavior is per-row dynamic and can't be an FK action — see [SCHEMA.md](../SCHEMA.md)). The "must be registered" rule is therefore an application invariant enforced in **`service.memo`** (the repository stays permissive):
 
 - `create_memo` / `update_memo` call `_require_known_category(user, category)`: the normalized category must be `OTHERS` or exist via `repository.category.category_exists_db(user, name)`, else `UnknownCategory` is raised. Each edge translates it (MCP → `Error: category 'X' is not registered. Create it first.`, web → HTTP 400).
 - On `update_memo`, `category=None` means unchanged (no check); `category=""` resets to `OTHERS` (always allowed).
@@ -21,8 +21,8 @@ A memo can only be linked to a category its owner has registered. This cross-ent
 `service.category` holds the domain rules (mirroring `service.user`), returning dicts or raising domain exceptions (`CategoryError` base: `CategoryNameRequired`, `CategoryAlreadyExists`, `CategoryNotFound`, `CannotModifyOthers`):
 
 - **create** — name required + normalized; duplicate → `CategoryAlreadyExists`.
-- **rename** — `OTHERS` forbidden; source must exist; renaming to a different existing name collides (`CategoryAlreadyExists`); renaming to the same normalized name is a no-op-allowed. **Cascades**: `repository.category.rename_category_db` renames the `categories` row *and* `UPDATE memos SET category=new WHERE user=? AND category=old` in one transaction, so linked memos follow automatically.
-- **delete** — `OTHERS` forbidden; **reassigns** linked memos to `OTHERS` (`UPDATE memos SET category='OTHERS' …`) then drops the `categories` row, in one transaction.
+- **rename** — `OTHERS` forbidden; source must exist; renaming to a different existing name collides (`CategoryAlreadyExists`); renaming to the same normalized name is a no-op-allowed. **Cascade (DB-side)**: `repository.category.rename_category_db` only renames the `categories` row; the `trg_categories_rename_cascade` trigger (`AFTER UPDATE OF name`) repoints `memos.category` for that owner in the same statement, so linked memos follow automatically.
+- **delete** — `OTHERS` forbidden; **reassign (DB-side)**: `repository.category.delete_category_db` only deletes the `categories` row; the `trg_categories_delete_reassign` trigger (`BEFORE DELETE`, skipping `OTHERS`) first sets linked memos to `OTHERS`. Both happen in the one delete statement's transaction.
 
 `service.category` also exposes `rename_category_by_id` / `delete_category_by_id` for the web layer, which addresses categories by numeric id (resolves id → name via `get_category_db`, then delegates to the name-based rule).
 
@@ -37,4 +37,4 @@ Category is still a read filter: `list_memos` / `search_memos` / `semantic_searc
 
 ## Layering
 
-`repository.category` imports only from `infra` (no `repository.memo` import → no cycle); it does the cascade `UPDATE memos …` with raw SQL in its own transaction. `repository.memo` imports `normalize_category` from `repository.category` (one-way `memo → category`). The `switch_user` MCP tool surfaces a user's category list via `service.category.list_categories` (transport edge → service, not repository).
+`repository.category` imports only from `infra` (no `repository.memo` import → no cycle); the cascade to `memos` is done by the DB triggers (defined in `infra.database._create_triggers`), not raw SQL in the repository. `repository.memo` imports `normalize_category` from `repository.category` (one-way `memo → category`). The `switch_user` MCP tool surfaces a user's category list via `service.category.list_categories` (transport edge → service, not repository).

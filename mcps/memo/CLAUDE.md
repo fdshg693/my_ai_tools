@@ -28,7 +28,11 @@ uv run memo-admin
 # Emit the full session picture (Mcp-Session-Id etc.) at DEBUG level on stderr
 uv run memo --user alice --debug        # or env MEMO_LOG_DEBUG=1
 
-# Unit tests (DB CRUD / search / user isolation / categories / user ledger / switch / audit log)
+# Migrate an existing DB to the latest schema (idempotent; same init_db() runs on startup)
+# Targets MEMO_DB_PATH / the default memo.db, or pass a path. Prints schema_version before->after.
+uv run memo-migrate            # or: uv run memo-migrate /path/to/memo.db
+
+# Unit tests (DB CRUD / search / user isolation / categories / user ledger / switch / audit log / migrations)
 uv run --project mcps/memo pytest mcps/memo/src/memo/tests/ -v
 
 # Inspect the registered tools via an MCP client (in-process connection)

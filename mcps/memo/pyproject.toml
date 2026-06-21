@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 memo = "memo.server.mcp.main:main"
 memo-admin = "memo.server.web.main:main"
+memo-migrate = "memo.migrations.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "httpx>=0.27"]
