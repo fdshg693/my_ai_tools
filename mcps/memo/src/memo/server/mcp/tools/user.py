@@ -11,9 +11,12 @@
 
 import json
 
+from fastmcp import Context
+
 from memo.infra.database import ADMIN_USER
 from memo.repository.memo import list_categories_db
 from memo.repository.user import is_registered_user
+from memo.server.mcp.admin_tools import ADMIN_TOOL_TAG, apply_session_visibility
 from memo.server.mcp.app import mcp
 from memo.server.mcp.auth import (
     http_client_id,
@@ -47,7 +50,8 @@ def _dump(obj) -> str:
         "display_name : 表示名 (任意)。\n"
         "note         : メモ・備考 (任意)。\n"
         "成功時は短いメッセージを返す。既に同名が存在すればその旨を返す。"
-    )
+    ),
+    tags={ADMIN_TOOL_TAG},
 )
 def create_user(name: str, display_name: str = "", note: str = "") -> str:
     """is_admin を確認し service.user.create_user を呼ぶ。ドメイン例外をメッセージに変換。"""
@@ -69,7 +73,8 @@ def create_user(name: str, display_name: str = "", note: str = "") -> str:
     description=(
         "(admin 専用) 登録済みユーザーの一覧を名前順に取得する。\n\n"
         "ユーザーの配列を JSON で返す。"
-    )
+    ),
+    tags={ADMIN_TOOL_TAG},
 )
 def list_users() -> str:
     """is_admin を確認し service.user.list_users を返す。"""
@@ -89,7 +94,8 @@ def list_users() -> str:
         "(admin 専用) ユーザーを1件取得する。\n\n"
         "name : 取得するユーザー名。\n"
         "見つかればユーザーを JSON で返し、無ければその旨を返す。"
-    )
+    ),
+    tags={ADMIN_TOOL_TAG},
 )
 def get_user(name: str) -> str:
     """is_admin を確認し service.user.get_user を呼ぶ。UserNotFound をメッセージに変換。"""
@@ -112,7 +118,8 @@ def get_user(name: str) -> str:
         "display_name : 新しい表示名 (省略時は変更しない)。\n"
         "note         : 新しいメモ・備考 (省略時は変更しない)。\n"
         "成功時は短いメッセージを返し、無ければその旨を返す。"
-    )
+    ),
+    tags={ADMIN_TOOL_TAG},
 )
 def update_user(name: str, display_name: str | None = None, note: str | None = None) -> str:
     """is_admin を確認し service.user.update_user を呼ぶ。name は不変、None=変更しない。"""
@@ -134,7 +141,8 @@ def update_user(name: str, display_name: str | None = None, note: str | None = N
         "name : 削除するユーザー名。\n"
         "そのユーザーのメモは削除せず残す (以後は admin だけが操作できる)。\n"
         "特権ユーザー admin 自身は削除できない。"
-    )
+    ),
+    tags={ADMIN_TOOL_TAG},
 )
 def delete_user(name: str) -> str:
     """is_admin を確認し service.user.delete_user を呼ぶ。admin 不可ガードは service 側。"""
@@ -161,14 +169,18 @@ def delete_user(name: str) -> str:
         "HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと\n"
         "切り替え状態を保持できない)。admin への切り替えも可能。\n"
         "成功時は、切り替え先ユーザーのメモが持つカテゴリ一覧も併せて返す\n"
-        "(検索・一覧を category で絞り込む際の手掛かりになる)。"
+        "(検索・一覧を category で絞り込む際の手掛かりになる)。\n"
+        "admin に切り替えると、この接続だけでユーザー管理ツールが有効化される\n"
+        "(無効化されている場合あり。env MEMO_ADMIN_TOOLS_AUTO_ENABLE)。"
     )
 )
-def switch_user(target: str) -> str:
+async def switch_user(target: str, ctx: Context) -> str:
     """stdio は set_stdio_user、HTTP は client_id→user マップを書き換える。
 
     admin 専用ではなく、登録済みなら誰でも切替可。成功メッセージに target の
-    カテゴリ一覧 (list_categories_db) を添える。
+    カテゴリ一覧 (list_categories_db) を添える。切替後、この接続だけ admin タグの
+    ツールの可視性を ``apply_session_visibility`` で更新する (admin → 有効化、
+    admin 以外 → 無効化)。FastMCP がこの変更で list_changed をクライアントへ自動送信する。
     """
     _user, _is_admin, error = resolve_caller()
     if error:
@@ -190,13 +202,17 @@ def switch_user(target: str) -> str:
     if not transport_is_http():
         # stdio: モジュール変数を実行時書き換え (GIL 下の単純代入で安全)
         set_stdio_user(target)
-        return f"Switched user to '{target}'. {cat_note}"
+        suffix = ""
+    else:
+        client_id = http_client_id()
+        if client_id is None:
+            return (
+                "Error: HTTP では接続時にクエリ ?client_id=NAME を指定してください "
+                "(client_id が無いと切り替え状態を保持できません)。"
+            )
+        switch_http_user(client_id, target)
+        suffix = f" (client_id={client_id})"
 
-    client_id = http_client_id()
-    if client_id is None:
-        return (
-            "Error: HTTP では接続時にクエリ ?client_id=NAME を指定してください "
-            "(client_id が無いと切り替え状態を保持できません)。"
-        )
-    switch_http_user(client_id, target)
-    return f"Switched user to '{target}' (client_id={client_id}). {cat_note}"
+    # この接続だけ admin タグのツールの可視性を切り替える (セッションレベル可視性)。
+    await apply_session_visibility(ctx, target)
+    return f"Switched user to '{target}'{suffix}. {cat_note}"

@@ -1,5 +1,7 @@
 # 以下のシンプルなPythonコードを元にMCPサーバーをどのようにFastMCPが構築するか理解する
 
+https://gofastmcp.com/getting-started/quickstart
+
 ```python
 from fastmcp import FastMCP
 

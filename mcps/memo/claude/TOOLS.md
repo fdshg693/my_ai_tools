@@ -22,7 +22,7 @@ Regular users operate only on their own memos; other users' memos are reported a
 
 ## User management tools (admin-only)
 
-Each returns an `admin-only` error unless the caller is `admin`. See [features/user.md](features/user.md).
+These 5 tools are tagged `admin` and their visibility is controlled by FastMCP's **Component Visibility** API (see [features/user.md](features/user.md) and `server/mcp/admin_tools.py`): they are **disabled at the server level by default**, so a fresh session does not list them and calling one by name returns `Unknown tool`. They become visible/callable **only after `switch_user("admin")`** on that connection (per-session enable), and only while the auto-enable switch `MEMO_ADMIN_TOOLS_AUTO_ENABLE` is on (set it falsy — `0`/`false`/`no`/`off` — to keep them disabled even for `admin`). Switching to a non-admin re-hides them. Behind this each tool still returns an `admin-only` error unless the caller is `admin` (defense in depth).
 
 | Tool | Args | Behavior |
 |------|------|----------|
@@ -38,7 +38,7 @@ Any registered caller may switch the current user. See [features/user.md](featur
 
 | Tool | Args | Behavior |
 |------|------|----------|
-| `switch_user` | `target` | Switch the connection's current user to `target` (must be registered; `admin` allowed) without reconnecting/restarting. On success the message also lists the **categories present in the target's memos** (`list_categories_db(target, is_admin = target==admin)`) — a hint for subsequent `category` filtering. stdio: rewrites the process user via `set_stdio_user`. HTTP: requires `?client_id=`; updates the `client_id → user` map. Errors if `target` unregistered or (HTTP) `client_id` absent. |
+| `switch_user` | `target` | Switch the connection's current user to `target` (must be registered; `admin` allowed) without reconnecting/restarting. On success the message also lists the **categories present in the target's memos** (`list_categories_db(target, is_admin = target==admin)`) — a hint for subsequent `category` filtering. stdio: rewrites the process user via `set_stdio_user`. HTTP: requires `?client_id=`; updates the `client_id → user` map. Errors if `target` unregistered or (HTTP) `client_id` absent. **Also updates admin-tool visibility for this session**: switching to `admin` enables the admin-tagged tools (unless `MEMO_ADMIN_TOOLS_AUTO_ENABLE` is off), switching away disables them (`list_changed` is sent to the client automatically). |
 
 ## Tool result verbosity
 

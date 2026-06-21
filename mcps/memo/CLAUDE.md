@@ -42,6 +42,7 @@ OPENAI_API_KEY=sk-... uv run memo --user admin
 
 Detailed docs live in [claude/](./claude/), split by topic:
 
+@./claude/CONVENTIONS.md
 @./claude/SCHEMA.md
 @./claude/FOLDER_STRUCTURE.md
 @./claude/TOOLS.md

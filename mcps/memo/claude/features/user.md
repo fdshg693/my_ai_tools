@@ -9,6 +9,17 @@
 
 **Security**: switching is unauthenticated (personal/local assumption) — any caller can become any registered user incl. `admin`. This is why HTTP `HOST` defaults to `127.0.0.1`. Exposing on `0.0.0.0` requires fronting with real auth.
 
+## Admin tool visibility (server-level default + per-session enable)
+
+The 5 user-management tools (`create_user` / `get_user` / `list_users` / `update_user` / `delete_user`) are tagged `admin` and their visibility uses FastMCP's official **Component Visibility** API (https://gofastmcp.com/servers/visibility) — implemented in `server/mcp/admin_tools.py`, **not** middleware. Two layers compose:
+
+- **Server level (default off).** At startup `apply_server_default(mcp)` calls `mcp.disable(tags={"admin"})` after the tools are registered. So every fresh session — *including a connection that started as `admin`* — does not list the admin tools, and calling one by name returns FastMCP's native `Unknown tool` error (existence is not even leaked).
+- **Session level (enable on switch to admin).** `switch_user` is `async` and receives an injected `ctx: Context`. After it rewrites the current user it calls `apply_session_visibility(ctx, target)`: if the new user is `admin` it does `ctx.enable_components(tags={"admin"})`, otherwise `ctx.disable_components(tags={"admin"})`. These apply to **that session only**, and FastMCP automatically emits `notifications/tools/list_changed`, so the client refreshes and sees the tools appear/disappear without reconnecting. (This auto-notification is the concrete reason not to reimplement visibility by filtering `tools/list` in middleware — a filter changes the list without telling the client.)
+
+Because the trigger is `switch_user`, a connection that *started* as `admin` must `switch_user("admin")` once to enable the tools (switching to your own current user re-applies visibility). `switch_user` itself is untagged, so it is always visible — that is how any connection reaches `admin`.
+
+**Safety switch.** "Just becoming `admin` makes destructive user-management tools appear" is risky under the unauthenticated `switch_user` model (anyone can become `admin`). `admin_tools_auto_enable()` reads `MEMO_ADMIN_TOOLS_AUTO_ENABLE` (env first, `mcps/memo/.env` fallback; default on; `0`/`false`/`no`/`off` = off). When off, `apply_session_visibility` skips the enable, so the admin tools stay disabled **even after switching to `admin`** — the only way to manage users then is the `memo-admin` web UI. This visibility layer sits *in front of* each tool's own `resolve_caller()`/`is_admin` check, not as a replacement (with the tools enabled the caller is `admin`, so the in-tool check passes; it remains as defense in depth).
+
 ## User management web UI (`memo-admin`)
 
 `server/web/` provides a browser UI for managing the `users` ledger without touching the DB by hand or going through Claude's `create_user` tool (`app.py` is the Starlette app body, `main.py` the `uvicorn` entry point). It is a **separate process** (`uv run memo-admin`) that opens the same `memo.db` (SQLite WAL makes concurrent multi-process access safe), so it works even when Claude Desktop isn't running. It deliberately follows the `dynamic_prompt` quiz-server precedent: Starlette + uvicorn + vanilla `static/` assets, no new framework and no Node build chain.
