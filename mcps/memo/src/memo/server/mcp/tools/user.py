@@ -40,16 +40,17 @@ def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "(admin 専用) 新しいユーザーを登録する。登録されたユーザーだけが接続できる。\n\n"
+        "name         : ユーザー名 (必須・一意の識別子)。\n"
+        "display_name : 表示名 (任意)。\n"
+        "note         : メモ・備考 (任意)。\n"
+        "成功時は短いメッセージを返す。既に同名が存在すればその旨を返す。"
+    )
+)
 def create_user(name: str, display_name: str = "", note: str = "") -> str:
-    """
-    (admin 専用) 新しいユーザーを登録する。登録されたユーザーだけが接続できる。
-
-    name         : ユーザー名 (必須・一意の識別子)。
-    display_name : 表示名 (任意)。
-    note         : メモ・備考 (任意)。
-    成功時は短いメッセージを返す。既に同名が存在すればその旨を返す。
-    """
+    """is_admin を確認し service.user.create_user を呼ぶ。ドメイン例外をメッセージに変換。"""
     _user, is_admin, error = resolve_caller()
     if error:
         return error
@@ -64,13 +65,14 @@ def create_user(name: str, display_name: str = "", note: str = "") -> str:
     return f"Created user '{created['name']}'."
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "(admin 専用) 登録済みユーザーの一覧を名前順に取得する。\n\n"
+        "ユーザーの配列を JSON で返す。"
+    )
+)
 def list_users() -> str:
-    """
-    (admin 専用) 登録済みユーザーの一覧を名前順に取得する。
-
-    ユーザーの配列を JSON で返す。
-    """
+    """is_admin を確認し service.user.list_users を返す。"""
     _user, is_admin, error = resolve_caller()
     if error:
         return error
@@ -82,14 +84,15 @@ def list_users() -> str:
     return _dump(users)
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "(admin 専用) ユーザーを1件取得する。\n\n"
+        "name : 取得するユーザー名。\n"
+        "見つかればユーザーを JSON で返し、無ければその旨を返す。"
+    )
+)
 def get_user(name: str) -> str:
-    """
-    (admin 専用) ユーザーを1件取得する。
-
-    name : 取得するユーザー名。
-    見つかればユーザーを JSON で返し、無ければその旨を返す。
-    """
+    """is_admin を確認し service.user.get_user を呼ぶ。UserNotFound をメッセージに変換。"""
     _user, is_admin, error = resolve_caller()
     if error:
         return error
@@ -102,16 +105,17 @@ def get_user(name: str) -> str:
     return _dump(user)
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "(admin 専用) ユーザーの属性を更新する。ユーザー名 (識別子) は変更できない。\n\n"
+        "name         : 更新するユーザー名。\n"
+        "display_name : 新しい表示名 (省略時は変更しない)。\n"
+        "note         : 新しいメモ・備考 (省略時は変更しない)。\n"
+        "成功時は短いメッセージを返し、無ければその旨を返す。"
+    )
+)
 def update_user(name: str, display_name: str | None = None, note: str | None = None) -> str:
-    """
-    (admin 専用) ユーザーの属性を更新する。ユーザー名 (識別子) は変更できない。
-
-    name         : 更新するユーザー名。
-    display_name : 新しい表示名 (省略時は変更しない)。
-    note         : 新しいメモ・備考 (省略時は変更しない)。
-    成功時は短いメッセージを返し、無ければその旨を返す。
-    """
+    """is_admin を確認し service.user.update_user を呼ぶ。name は不変、None=変更しない。"""
     _user, is_admin, error = resolve_caller()
     if error:
         return error
@@ -124,15 +128,16 @@ def update_user(name: str, display_name: str | None = None, note: str | None = N
     return f"Updated user '{name}'."
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "(admin 専用) ユーザーを台帳から削除する。以後そのユーザーは接続できない。\n\n"
+        "name : 削除するユーザー名。\n"
+        "そのユーザーのメモは削除せず残す (以後は admin だけが操作できる)。\n"
+        "特権ユーザー admin 自身は削除できない。"
+    )
+)
 def delete_user(name: str) -> str:
-    """
-    (admin 専用) ユーザーを台帳から削除する。以後そのユーザーは接続できない。
-
-    name : 削除するユーザー名。
-    そのユーザーのメモは削除せず残す (以後は admin だけが操作できる)。
-    特権ユーザー admin 自身は削除できない。
-    """
+    """is_admin を確認し service.user.delete_user を呼ぶ。admin 不可ガードは service 側。"""
     _user, is_admin, error = resolve_caller()
     if error:
         return error
@@ -148,17 +153,22 @@ def delete_user(name: str) -> str:
     return f"Deleted user '{name}'."
 
 
-@mcp.tool
+@mcp.tool(
+    description=(
+        "現在の接続ユーザーを target に切り替える (個人ローカル運用向け・admin 専用ではない)。\n\n"
+        "target : 切り替え先のユーザー名 (users 台帳に登録済みであること)。\n"
+        "stdio では以後この接続のメモ操作が target のものになる (サーバー再起動は不要)。\n"
+        "HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと\n"
+        "切り替え状態を保持できない)。admin への切り替えも可能。\n"
+        "成功時は、切り替え先ユーザーのメモが持つカテゴリ一覧も併せて返す\n"
+        "(検索・一覧を category で絞り込む際の手掛かりになる)。"
+    )
+)
 def switch_user(target: str) -> str:
-    """
-    現在の接続ユーザーを target に切り替える (個人ローカル運用向け・admin 専用ではない)。
+    """stdio は set_stdio_user、HTTP は client_id→user マップを書き換える。
 
-    target : 切り替え先のユーザー名 (users 台帳に登録済みであること)。
-    stdio では以後この接続のメモ操作が target のものになる (サーバー再起動は不要)。
-    HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと
-    切り替え状態を保持できない)。admin への切り替えも可能。
-    成功時は、切り替え先ユーザーのメモが持つカテゴリ一覧も併せて返す
-    (検索・一覧を category で絞り込む際の手掛かりになる)。
+    admin 専用ではなく、登録済みなら誰でも切替可。成功メッセージに target の
+    カテゴリ一覧 (list_categories_db) を添える。
     """
     _user, _is_admin, error = resolve_caller()
     if error:

@@ -1,0 +1,7 @@
+# Feature: Category
+
+Every memo belongs to a category (`memos.category`). Unspecified/empty category means the default `OTHERS` (`OTHERS_CATEGORY` in `infra/database.py`). Category names are normalized on write by `repository.memo.normalize_category()` — **trim + uppercase**, empty/`None` → `OTHERS` — so `work` / `Work` / `WORK` are one category and stored values are always canonical uppercase. Both write surfaces (MCP tools, web UI) go through the repository, so normalization is consistent everywhere; the filter side normalizes the query the same way, guaranteeing the comparison matches stored values.
+
+Migration: `init_db()` adds the column to a legacy DB via `ALTER TABLE memos ADD COLUMN category TEXT NOT NULL DEFAULT 'OTHERS'`, so all pre-existing memos become `OTHERS` in one step (same lightweight `PRAGMA table_info` pattern as the `user` column).
+
+Category is **also a read filter**: `list_memos` / `search_memos` / `semantic_search_memos` (MCP) and the web memo list accept an optional `category` that restricts results to a single category (empty/`None` = all categories). This is the "specify a category so only same-category memos appear in results" behavior. The filter is built once in `repository.memo._base_filter(user, is_admin, category)`, shared by `list_memos_db` / `count_memos_db` / `search_memos_db`; `service.memo.semantic_search` passes `category` straight through to `list_memos_db`. On `update_memo`, a `None` category leaves it unchanged while an empty string explicitly resets to `OTHERS`.

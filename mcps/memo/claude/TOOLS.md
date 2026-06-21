@@ -1,0 +1,45 @@
+# Tools
+
+The server exposes 13 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, `list_memos`, `search_memos`, `semantic_search_memos`, `update_memo`, `delete_memo`. **User management tools (5, admin-only):** `create_user`, `get_user`, `list_users`, `update_user`, `delete_user`. **Session tool (1, not admin-only):** `switch_user`.
+
+## Tool description vs. docstring
+
+The tool description shown to MCP clients (the LLM) is given **explicitly** via the `@mcp.tool(description=...)` argument — it carries the caller-facing usage (purpose + each parameter). The function's **docstring is for coders only** (implementation notes: authorization flow, `is_admin` propagation, where normalization lives) and is *not* the tool description. Keep the two separated so caller-facing wording and code-maintenance notes don't bleed into each other (previously the docstring doubled as both). When adding a tool, supply `description=` for the caller and reserve the docstring for implementation detail. (Pattern precedent: `dynamic_prompt`'s `get_instruction`.)
+
+## Memo tools
+
+Regular users operate only on their own memos; other users' memos are reported as "not found" so existence is not leaked. `admin` operates on all memos (including orphans owned by `user=''`). See [features/memo.md](features/memo.md) for the access model and search behavior.
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `create_memo` | `title`, `summary=""`, `category=""` | Create a memo. `title` required. `category` normalized (empty → `OTHERS`). Owner is the connected user (an admin-created memo is owned by `admin`). Returns a short message with the new id and normalized category. |
+| `get_memo` | `memo_id` | Fetch one memo by id (incl. `category`). Own memos only; admin sees any owner. |
+| `list_memos` | `limit=50`, `category=""` | List memos newest-first (`updated_at` desc). `category` (optional) restricts to one category; empty = all. Own memos only; admin sees all. |
+| `search_memos` | `query`, `limit=50`, `category=""` | Title substring search. `query` is comma-split into OR keywords; each result carries `matched_keywords`. `category` (optional) restricts to one category. Own memos only; admin sees all. |
+| `semantic_search_memos` | `query`, `limit=5`, `category=""` | Semantic search over **summaries**. Results carry `similarity` (0–1), sorted desc; empty summaries are excluded. `category` (optional) restricts to one category. Own memos only; admin sees all. Needs `OPENAI_API_KEY`. |
+| `update_memo` | `memo_id`, `title=None`, `summary=None`, `category=None` | Update only the supplied fields. `category=None` leaves it unchanged; empty string resets to `OTHERS`. Own memos only; admin any owner. |
+| `delete_memo` | `memo_id` | Delete a memo. Own memos only; admin any owner. |
+
+## User management tools (admin-only)
+
+Each returns an `admin-only` error unless the caller is `admin`. See [features/user.md](features/user.md).
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `create_user` | `name`, `display_name=""`, `note=""` | Register a user. `name` required, unique identifier. Returns a no-op message if it already exists. |
+| `get_user` | `name` | Fetch one user. |
+| `list_users` | — | List registered users by name. |
+| `update_user` | `name`, `display_name=None`, `note=None` | Update attributes (display name / note). `name` (identifier) is immutable. |
+| `delete_user` | `name` | Remove a user from the ledger (memos kept). `admin` itself cannot be deleted. |
+
+## Session tool (not admin-only)
+
+Any registered caller may switch the current user. See [features/user.md](features/user.md) for the stdio/HTTP mechanics.
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `switch_user` | `target` | Switch the connection's current user to `target` (must be registered; `admin` allowed) without reconnecting/restarting. On success the message also lists the **categories present in the target's memos** (`list_categories_db(target, is_admin = target==admin)`) — a hint for subsequent `category` filtering. stdio: rewrites the process user via `set_stdio_user`. HTTP: requires `?client_id=`; updates the `client_id → user` map. Errors if `target` unregistered or (HTTP) `client_id` absent. |
+
+## Tool result verbosity
+
+`create_memo` / `update_memo` return a concise message similar to `delete_memo` (`Created memo id=N.` / `Updated memo id=N.`) rather than the full record, to limit LLM context consumption. When the record contents are needed, use `get_memo` / `list_memos` / `search_memos`.
