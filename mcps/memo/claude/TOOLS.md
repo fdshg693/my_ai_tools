@@ -1,6 +1,6 @@
 # Tools
 
-The server exposes 13 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, `list_memos`, `search_memos`, `semantic_search_memos`, `update_memo`, `delete_memo`. **User management tools (5, admin-only):** `create_user`, `get_user`, `list_users`, `update_user`, `delete_user`. **Session tool (1, not admin-only):** `switch_user`.
+The server exposes 15 MCP tools. **Memo tools (7):** `create_memo`, `get_memo`, `list_memos`, `search_memos`, `semantic_search_memos`, `update_memo`, `delete_memo`. **Category tools (2, create/read only):** `create_category`, `list_categories`. **User management tools (5, admin-only):** `create_user`, `get_user`, `list_users`, `update_user`, `delete_user`. **Session tool (1, not admin-only):** `switch_user`.
 
 ## Tool description vs. docstring
 
@@ -8,17 +8,26 @@ The tool description shown to MCP clients (the LLM) is given **explicitly** via 
 
 ## Memo tools
 
-Regular users operate only on their own memos; other users' memos are reported as "not found" so existence is not leaked. `admin` operates on all memos (including orphans owned by `user=''`). See [features/memo.md](features/memo.md) for the access model and search behavior.
+All callers — including `admin` — operate only on their own memos; other users' memos are reported as "not found" so existence is not leaked. There is no cross-user mode. See [features/memo.md](features/memo.md) for the access model and search behavior.
 
 | Tool | Args | Behavior |
 |------|------|----------|
-| `create_memo` | `title`, `summary=""`, `category=""` | Create a memo. `title` required. `category` normalized (empty → `OTHERS`). Owner is the connected user (an admin-created memo is owned by `admin`). Returns a short message with the new id and normalized category. |
-| `get_memo` | `memo_id` | Fetch one memo by id (incl. `category`). Own memos only; admin sees any owner. |
-| `list_memos` | `limit=50`, `category=""` | List memos newest-first (`updated_at` desc). `category` (optional) restricts to one category; empty = all. Own memos only; admin sees all. |
-| `search_memos` | `query`, `limit=50`, `category=""` | Title substring search. `query` is comma-split into OR keywords; each result carries `matched_keywords`. `category` (optional) restricts to one category. Own memos only; admin sees all. |
-| `semantic_search_memos` | `query`, `limit=5`, `category=""` | Semantic search over **summaries**. Results carry `similarity` (0–1), sorted desc; empty summaries are excluded. `category` (optional) restricts to one category. Own memos only; admin sees all. Needs `OPENAI_API_KEY`. |
-| `update_memo` | `memo_id`, `title=None`, `summary=None`, `category=None` | Update only the supplied fields. `category=None` leaves it unchanged; empty string resets to `OTHERS`. Own memos only; admin any owner. |
-| `delete_memo` | `memo_id` | Delete a memo. Own memos only; admin any owner. |
+| `create_memo` | `title`, `summary=""`, `category=""` | Create a memo owned by the connected user. `title` required. `category` normalized (empty → `OTHERS`); must be one of the caller's registered categories else `Error: category 'X' is not registered.` Returns a short message with the new id and normalized category. |
+| `get_memo` | `memo_id` | Fetch one memo by id (incl. `category`). Own memos only. |
+| `list_memos` | `limit=50`, `category=""` | List memos newest-first (`updated_at` desc). `category` (optional) restricts to one category; empty = all. Own memos only. |
+| `search_memos` | `query`, `limit=50`, `category=""` | Title substring search. `query` is comma-split into OR keywords; each result carries `matched_keywords`. `category` (optional) restricts to one category. Own memos only. |
+| `semantic_search_memos` | `query`, `limit=5`, `category=""` | Semantic search over **summaries**. Results carry `similarity` (0–1), sorted desc; empty summaries are excluded. `category` (optional) restricts to one category. Own memos only. Needs `OPENAI_API_KEY`. |
+| `update_memo` | `memo_id`, `title=None`, `summary=None`, `category=None` | Update only the supplied fields. `category=None` leaves it unchanged; empty string resets to `OTHERS`; a non-empty value must be a registered category else an error. Own memos only. |
+| `delete_memo` | `memo_id` | Delete a memo. Own memos only. |
+
+## Category tools (create/read only)
+
+Categories are per-user (see [features/category.md](features/category.md)). MCP exposes only create + list; rename/delete are done from the `memo-admin` web UI. Both scope to the connected user (`admin` sees only its own categories).
+
+| Tool | Args | Behavior |
+|------|------|----------|
+| `create_category` | `name` | Create a category for the connected user. `name` required, normalized (uppercase). Returns a no-op-style message if it already exists. |
+| `list_categories` | — | List the connected user's categories (JSON array, name-sorted). |
 
 ## User management tools (admin-only)
 
@@ -38,7 +47,7 @@ Any registered caller may switch the current user. See [features/user.md](featur
 
 | Tool | Args | Behavior |
 |------|------|----------|
-| `switch_user` | `target` | Switch the connection's current user to `target` (must be registered; `admin` allowed) without reconnecting/restarting. On success the message also lists the **categories present in the target's memos** (`list_categories_db(target, is_admin = target==admin)`) — a hint for subsequent `category` filtering. stdio: rewrites the process user via `set_stdio_user`. HTTP: requires `?client_id=`; updates the `client_id → user` map. Errors if `target` unregistered or (HTTP) `client_id` absent. **Also updates admin-tool visibility for this session**: switching to `admin` enables the admin-tagged tools (unless `MEMO_ADMIN_TOOLS_AUTO_ENABLE` is off), switching away disables them (`list_changed` is sent to the client automatically). |
+| `switch_user` | `target` | Switch the connection's current user to `target` (must be registered; `admin` allowed) without reconnecting/restarting. On success the message also lists the **target's registered categories** (`service.category.list_categories(target)`, read from the `categories` table — per-user) — a hint for picking a category on new memos or for `category` filtering. stdio: rewrites the process user via `set_stdio_user`. HTTP: requires `?client_id=`; updates the `client_id → user` map. Errors if `target` unregistered or (HTTP) `client_id` absent. **Also updates admin-tool visibility for this session**: switching to `admin` enables the admin-tagged tools (unless `MEMO_ADMIN_TOOLS_AUTO_ENABLE` is off), switching away disables them (`list_changed` is sent to the client automatically). |
 
 ## Tool result verbosity
 

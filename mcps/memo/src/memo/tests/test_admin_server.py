@@ -305,6 +305,7 @@ def test_delete_user_memo_missing_404(client):
 
 def test_create_user_memo_with_category(client):
     client.post("/api/users", json={"name": "cat-a"})
+    client.post("/api/users/cat-a/categories", json={"name": "work"})
     res = client.post(
         "/api/users/cat-a/memos", json={"title": "T", "category": "work"}
     )
@@ -318,8 +319,18 @@ def test_create_user_memo_defaults_category_others(client):
     assert res.json()["category"] == "OTHERS"
 
 
+def test_create_user_memo_rejects_unregistered_category(client):
+    client.post("/api/users", json={"name": "cat-x"})
+    # カテゴリ未登録で指定すると 400 (先に作成が必要)
+    res = client.post(
+        "/api/users/cat-x/memos", json={"title": "T", "category": "work"}
+    )
+    assert res.status_code == 400
+
+
 def test_update_user_memo_category(client):
     client.post("/api/users", json={"name": "cat-c"})
+    client.post("/api/users/cat-c/categories", json={"name": "private"})
     memo = create_memo_db("cat-c", "T", "", category="work")
     res = client.put(
         f"/api/users/cat-c/memos/{memo['id']}", json={"category": "private"}
@@ -339,3 +350,121 @@ def test_list_user_memos_filters_by_category(client):
     assert work["items"][0]["title"] == "w1"
     # 絞り込みなしは全件
     assert client.get("/api/users/cat-d/memos").json()["total"] == 3
+
+
+# ---------------------------------------------------------------------------
+# カテゴリ管理エンドポイント (一覧 / 作成 / リネーム / 削除)
+# ---------------------------------------------------------------------------
+
+
+def _cat_id(client, user, name):
+    """指定ユーザーのカテゴリ一覧から name の id を引く。"""
+    cats = client.get(f"/api/users/{user}/categories").json()
+    return next(c["id"] for c in cats if c["name"] == name)
+
+
+def test_list_categories_new_user_only_others(client):
+    client.post("/api/users", json={"name": "kat-a"})
+    res = client.get("/api/users/kat-a/categories")
+    assert res.status_code == 200
+    assert [c["name"] for c in res.json()] == ["OTHERS"]
+
+
+def test_list_categories_missing_user_404(client):
+    assert client.get("/api/users/ghost/categories").status_code == 404
+
+
+def test_create_category(client):
+    client.post("/api/users", json={"name": "kat-b"})
+    res = client.post("/api/users/kat-b/categories", json={"name": "work"})
+    assert res.status_code == 201
+    assert res.json()["name"] == "WORK"  # 正規化
+    names = [c["name"] for c in client.get("/api/users/kat-b/categories").json()]
+    assert names == ["OTHERS", "WORK"]
+
+
+def test_create_category_requires_name(client):
+    client.post("/api/users", json={"name": "kat-c"})
+    res = client.post("/api/users/kat-c/categories", json={"name": "  "})
+    assert res.status_code == 400
+
+
+def test_create_category_duplicate_409(client):
+    client.post("/api/users", json={"name": "kat-d"})
+    client.post("/api/users/kat-d/categories", json={"name": "work"})
+    res = client.post("/api/users/kat-d/categories", json={"name": "WORK"})
+    assert res.status_code == 409
+
+
+def test_create_category_missing_user_404(client):
+    res = client.post("/api/users/ghost/categories", json={"name": "work"})
+    assert res.status_code == 404
+
+
+def test_rename_category_cascades_to_memos(client):
+    client.post("/api/users", json={"name": "kat-e"})
+    client.post("/api/users/kat-e/categories", json={"name": "work"})
+    memo = client.post(
+        "/api/users/kat-e/memos", json={"title": "m", "category": "work"}
+    ).json()
+    cid = _cat_id(client, "kat-e", "WORK")
+
+    res = client.put(f"/api/users/kat-e/categories/{cid}", json={"name": "job"})
+    assert res.status_code == 200
+    # メモのカテゴリも追従する
+    listing = client.get("/api/users/kat-e/memos").json()
+    moved = next(m for m in listing["items"] if m["id"] == memo["id"])
+    assert moved["category"] == "JOB"
+
+
+def test_rename_others_forbidden_403(client):
+    client.post("/api/users", json={"name": "kat-f"})
+    cid = _cat_id(client, "kat-f", "OTHERS")
+    res = client.put(f"/api/users/kat-f/categories/{cid}", json={"name": "x"})
+    assert res.status_code == 403
+
+
+def test_rename_collision_409(client):
+    client.post("/api/users", json={"name": "kat-g"})
+    client.post("/api/users/kat-g/categories", json={"name": "work"})
+    client.post("/api/users/kat-g/categories", json={"name": "private"})
+    cid = _cat_id(client, "kat-g", "WORK")
+    res = client.put(f"/api/users/kat-g/categories/{cid}", json={"name": "private"})
+    assert res.status_code == 409
+
+
+def test_rename_missing_category_404(client):
+    client.post("/api/users", json={"name": "kat-h"})
+    res = client.put("/api/users/kat-h/categories/99999", json={"name": "x"})
+    assert res.status_code == 404
+
+
+def test_delete_category_reassigns_memos_to_others(client):
+    client.post("/api/users", json={"name": "kat-i"})
+    client.post("/api/users/kat-i/categories", json={"name": "work"})
+    memo = client.post(
+        "/api/users/kat-i/memos", json={"title": "m", "category": "work"}
+    ).json()
+    cid = _cat_id(client, "kat-i", "WORK")
+
+    res = client.delete(f"/api/users/kat-i/categories/{cid}")
+    assert res.status_code == 200
+    # カテゴリが消え、メモは OTHERS へ
+    names = [c["name"] for c in client.get("/api/users/kat-i/categories").json()]
+    assert names == ["OTHERS"]
+    listing = client.get("/api/users/kat-i/memos").json()
+    moved = next(m for m in listing["items"] if m["id"] == memo["id"])
+    assert moved["category"] == "OTHERS"
+
+
+def test_delete_others_forbidden_403(client):
+    client.post("/api/users", json={"name": "kat-j"})
+    cid = _cat_id(client, "kat-j", "OTHERS")
+    res = client.delete(f"/api/users/kat-j/categories/{cid}")
+    assert res.status_code == 403
+
+
+def test_delete_missing_category_404(client):
+    client.post("/api/users", json={"name": "kat-k"})
+    res = client.delete("/api/users/kat-k/categories/99999")
+    assert res.status_code == 404

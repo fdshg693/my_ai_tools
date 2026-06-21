@@ -2,7 +2,7 @@
 
 ## User switching
 
-`switch_user(target)` changes the connection's current user without reconnecting/restarting, separating a **stable client identity** from the **mutable current user**. The success message also surfaces the target's memo categories (via `service.category.list_categories`) so the caller can immediately scope follow-up `list_memos`/`search_memos`/`semantic_search_memos` calls by `category`:
+`switch_user(target)` changes the connection's current user without reconnecting/restarting, separating a **stable client identity** from the **mutable current user**. The success message also surfaces the target's registered categories (via `service.category.list_categories`, read from the `categories` table — per-user, no admin cross-user) so the caller can immediately pick a category for new memos or scope follow-up `list_memos`/`search_memos`/`semantic_search_memos` calls by `category`:
 
 - **stdio** (per-process, single user): rewrites the module-level `_stdio_user` via `set_stdio_user`. A single-assignment write is atomic under the GIL.
 - **HTTP** (shared, multi-client): keyed by the self-supplied `?client_id=` query param, not by `Mcp-Session-Id`. `Mcp-Session-Id` is stable within one connection but **changes on reconnect (re-initialize)**, so it cannot persist switch state; `client_id` is stable across reconnects. `current_user()` seeds `_http_user_by_client[client_id]` from `?user=` with `setdefault` (first value wins), and `switch_user` overwrites it. HTTP without `client_id` cannot hold switch state and `switch_user` returns an error.
@@ -30,14 +30,18 @@ Because the trigger is `switch_user`, a connection that *started* as `admin` mus
 |--------|------|-----------------|-------|
 | GET | `/` | — | Serves `static/admin.html` |
 | GET | `/api/users` | `list_users()` | Array, name-sorted |
-| GET | `/api/users/{name}/memos` | `count_memos_db` + `list_memos_db` (repository, read-only) | Paginated memo list for one user (newest-first). Query `page` (1-based) / `per_page` (≤100, default 20) / `category` (optional filter). Returns `{user, items, page, per_page, total, total_pages}`; 404 (`UserNotFound`) |
-| POST | `/api/users/{name}/memos` | `create_memo_db(name, title, summary, category)` (repository) | Create a memo owned by `name`. `title` required → 400; optional `category` (empty → `OTHERS`); user absent → 404; 201 on success |
-| PUT | `/api/users/{name}/memos/{memo_id}` | `update_memo_db(name, memo_id, title, summary, category)` (repository, `is_admin=False`) | Partial update (omitted field unchanged); empty `title` → 400; memo not under that user → 404 |
-| DELETE | `/api/users/{name}/memos/{memo_id}` | `delete_memo_db(name, memo_id)` (repository, `is_admin=False`) | Delete one of that user's memos; not found → 404; `{deleted: memo_id}` on success |
-| POST | `/api/users` | `create_user(name, display_name, note)` | 400 (`NameRequired`); 409 (`UserAlreadyExists`); 201 on success |
+| GET | `/api/users/{name}/memos` | `count_memos` + `list_memos` (service) | Paginated memo list for one user (newest-first). Query `page` (1-based) / `per_page` (≤100, default 20) / `category` (optional filter). Returns `{user, items, page, per_page, total, total_pages}`; 404 (`UserNotFound`) |
+| POST | `/api/users/{name}/memos` | `create_memo(name, title, summary, category)` (service) | Create a memo owned by `name`. `title` required → 400; `category` must be a registered category of `name` (empty → `OTHERS`) else 400 (`UnknownCategory`); user absent → 404; 201 on success |
+| PUT | `/api/users/{name}/memos/{memo_id}` | `update_memo(name, memo_id, …, category)` (service) | Partial update (omitted field unchanged); empty `title` → 400; unregistered `category` → 400 (`UnknownCategory`); memo not under that user → 404 |
+| DELETE | `/api/users/{name}/memos/{memo_id}` | `delete_memo(name, memo_id)` (service) | Delete one of that user's memos; not found → 404; `{deleted: memo_id}` on success |
+| GET | `/api/users/{name}/categories` | `list_categories(name)` | That user's categories, name-sorted; 404 (`UserNotFound`) |
+| POST | `/api/users/{name}/categories` | `create_category(name, body.name)` | 400 (`CategoryNameRequired`); 409 (`CategoryAlreadyExists`); 404 (`UserNotFound`); 201 |
+| PUT | `/api/users/{name}/categories/{category_id}` | `rename_category_by_id(name, id, body.name)` | Rename; cascades to that user's memos. 400 / 403 (`CannotModifyOthers`) / 404 (`CategoryNotFound`) / 409 (`CategoryAlreadyExists`) |
+| DELETE | `/api/users/{name}/categories/{category_id}` | `delete_category_by_id(name, id)` | Delete; reassigns linked memos to `OTHERS`. 403 (`CannotModifyOthers`) / 404 (`CategoryNotFound`); `{deleted: id}` |
+| POST | `/api/users` | `create_user(name, display_name, note)` | 400 (`NameRequired`); 409 (`UserAlreadyExists`); 201 on success. Seeds the new user's `OTHERS` category |
 | GET | `/api/users/{name}` | `get_user(name)` | 404 (`UserNotFound`) |
 | PUT | `/api/users/{name}` | `update_user(name, display_name, note)` | Omitted fields stay unchanged (sends `None`); `name` immutable; 404 (`UserNotFound`) |
-| DELETE | `/api/users/{name}` | `delete_user(name)` | 403 (`CannotDeleteAdmin`, the guard shared with the `delete_user` tool); 404 (`UserNotFound`) |
+| DELETE | `/api/users/{name}` | `delete_user(name)` | 403 (`CannotDeleteAdmin`, the guard shared with the `delete_user` tool); 404 (`UserNotFound`). **Cascade-deletes** that user's memos, categories, and embeddings |
 
 **Security**: unauthenticated, same model as `switch_user` — anyone who can reach the port can edit any user incl. `admin`. The default `127.0.0.1` bind keeps it local; `MEMO_ADMIN_HOST=0.0.0.0` logs a warning and must be fronted with real auth.
 

@@ -18,6 +18,7 @@ from fastmcp.exceptions import ToolError
 
 from memo.infra.database import ADMIN_USER
 from memo.infra.embedding import EmbeddingError
+from memo.repository.category import create_category_db
 from memo.repository.memo import create_memo_db
 from memo.repository.user import create_user_db
 from memo.server.mcp import auth as auth_module
@@ -43,6 +44,8 @@ NON_ADMIN_TOOLS = {
     "semantic_search_memos",
     "update_memo",
     "delete_memo",
+    "create_category",
+    "list_categories",
     "switch_user",
 }
 
@@ -168,10 +171,41 @@ def test_crud_roundtrip():
     assert "matched_keywords" in searched
 
 
+def test_create_category_and_list():
+    create_user_db("newcatuser")
+    set_stdio_user("newcatuser")
+    try:
+        created = asyncio.run(_call("create_category", {"name": "work"}))
+        assert created == "Created category 'WORK'."
+        listed = asyncio.run(_call("list_categories", {}))
+        assert "WORK" in listed
+        # 重複はその旨を返す
+        dup = asyncio.run(_call("create_category", {"name": "WORK"}))
+        assert "already exists" in dup
+    finally:
+        set_stdio_user(None)
+
+
+def test_create_memo_rejects_unregistered_category():
+    create_user_db("rejectcat")
+    set_stdio_user("rejectcat")
+    try:
+        # 未登録カテゴリでのメモ作成は拒否される (先に create_category が必要)
+        result = asyncio.run(
+            _call("create_memo", {"title": "メモ", "category": "work"})
+        )
+        assert "is not registered" in result
+    finally:
+        set_stdio_user(None)
+
+
 def test_category_filter_roundtrip():
     create_user_db("catuser")
     set_stdio_user("catuser")
     try:
+        # 先にカテゴリを登録してからメモを作る (未登録カテゴリは拒否されるため)
+        asyncio.run(_call("create_category", {"name": "work"}))
+        asyncio.run(_call("create_category", {"name": "private"}))
         created = asyncio.run(
             _call("create_memo", {"title": "仕事メモ", "category": "work"})
         )
@@ -242,7 +276,8 @@ def test_admin_tool_stays_uncallable_when_auto_enable_disabled(monkeypatch):
     assert "Unknown tool" in str(excinfo.value)
 
 
-def test_admin_sees_all_users_memos():
+def test_admin_cannot_see_other_users_memos():
+    # admin は通常ユーザーと同じく自分のメモしか見えない (完全分離)。
     create_user_db("alice")
     create_memo_db("alice", "alice の会議メモ", "")
     set_stdio_user(ADMIN_USER)
@@ -250,7 +285,7 @@ def test_admin_sees_all_users_memos():
         listed = asyncio.run(_call("list_memos", {}))
     finally:
         set_stdio_user(None)
-    assert "alice の会議メモ" in listed
+    assert "alice の会議メモ" not in listed
 
 
 def test_admin_can_create_user():
@@ -332,15 +367,15 @@ def test_switch_user_stdio_changes_owner():
 
 def test_switch_user_returns_target_categories():
     create_user_db("alice")
-    # 切り替え先 alice のメモが持つカテゴリが切り替え結果に含まれる
-    create_memo_db("alice", "仕事", "", category="work")
-    create_memo_db("alice", "私用", "", category="private")
+    # 切り替え先 alice が持つカテゴリが切り替え結果に含まれる
+    create_category_db("alice", "work")
+    create_category_db("alice", "private")
     set_stdio_user(ADMIN_USER)
     try:
         switched = asyncio.run(_call("switch_user", {"target": "alice"}))
     finally:
         set_stdio_user(None)
-    assert "メモのカテゴリ:" in switched
+    assert "カテゴリ:" in switched
     # 正規化済み (大文字)・名前順で列挙される
     assert "PRIVATE" in switched
     assert "WORK" in switched

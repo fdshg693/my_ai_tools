@@ -30,9 +30,11 @@ OTHERS_CATEGORY = "OTHERS"
 def init_db() -> None:
     """スキーマを作成する。サーバー起動時に1回だけ呼ぶ (冪等)。
 
-    ``user`` カラムを持たない既存 DB は ``ALTER TABLE`` で移行する
-    (既存メモは ``user=''`` となり、admin 以外からはアクセスできなくなる)。
-    ``users`` テーブルを作成し、特権ユーザー ``admin`` をシードする。
+    ``user`` カラムを持たない既存 DB は ``ALTER TABLE`` で移行する。
+    ``users`` テーブルを作成し、ユーザー管理用の ``admin`` をシードする。
+    カテゴリは ``categories`` テーブルでユーザーごとに管理する第一級の実体で、
+    各ユーザーへ既定カテゴリ ``OTHERS`` をシードし、既存メモが持つ
+    ``(user, category)`` をカテゴリとして後埋めする (既存メモを有効に保つ)。
     """
     db = sqlite3.connect(DB_PATH)
     try:
@@ -72,10 +74,37 @@ def init_db() -> None:
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
-        # 特権ユーザー admin を必ず用意する (ブートストラップ)
+        # ユーザー管理用の admin を必ず用意する (ブートストラップ)。admin は
+        # ユーザー台帳を CRUD できるだけの通常ユーザーで、他人のメモは操作しない。
         db.execute(
             "INSERT OR IGNORE INTO users (name, display_name) VALUES (?, ?)",
             (ADMIN_USER, "Administrator"),
+        )
+
+        # ユーザーごとのカテゴリ台帳 (第一級の実体)。(user, name) で一意。
+        # メモは自分の登録済みカテゴリにしか紐づけられない (検証は service 層)。
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS categories (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user       TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user, name)
+            )
+        """)
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user)"
+        )
+        # 全ユーザーへ既定カテゴリ OTHERS をシードし、既存メモが持つカテゴリを
+        # 後埋めする (どちらも INSERT OR IGNORE で冪等)。
+        db.execute(
+            "INSERT OR IGNORE INTO categories (user, name) "
+            f"SELECT name, '{OTHERS_CATEGORY}' FROM users"
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO categories (user, name) "
+            "SELECT DISTINCT user, category FROM memos"
         )
 
         # セマンティック検索用の埋め込みベクトルキャッシュ。memo_id ごとに1行。

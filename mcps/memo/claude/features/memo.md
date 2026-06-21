@@ -1,14 +1,14 @@
 # Feature: Memo
 
-## User isolation / registration / admin privilege
+## User isolation / registration
 
-A memo is owned by the connected user that created it. For regular callers (`is_admin=False`), every `*_memo_db` helper filters with `WHERE user = ?`, so other users' memos never appear in list/search, and supplying someone else's id to `get`/`update`/`delete` yields "no match" (None / False) — existence itself is not leaked.
+A memo is owned by the connected user that created it. **Every** `*_memo_db` helper filters with `WHERE user = ?` (there is no cross-user mode), so other users' memos never appear in list/search, and supplying someone else's id to `get`/`update`/`delete` yields "no match" (None / False) — existence itself is not leaked. This applies to **all** callers including `admin`: `admin` is just a normal user that can also manage the `users` ledger — it cannot read, list, search, update, or delete another user's memos.
 
-Connections are allowed only for users registered in the `users` ledger. `resolve_caller()` rejects both the unidentified case (`current_user()` is None) and the unregistered case (`is_registered_user` is False). `admin` (`ADMIN_USER`) is the fixed user always seeded by `init_db()` via `INSERT OR IGNORE`, and cannot be deleted (`delete_user` guards it).
+Connections are allowed only for users registered in the `users` ledger. `resolve_caller()` rejects both the unidentified case (`current_user()` is None) and the unregistered case (`is_registered_user` is False). `admin` (`ADMIN_USER`) is always seeded by `init_db()` via `INSERT OR IGNORE`, and cannot be deleted (`delete_user` guards it). `resolve_caller()` still returns `is_admin`, but it is used **only** to gate the user-management tools (`*_user` return an `admin-only` error unless `is_admin`); memo and category tools ignore it.
 
-Only an `admin` connection invokes the memo tools with `is_admin=True`, dropping the user filter to operate on all users (including orphan memos with `user=''`). User-management tools (`*_user`) return an `admin-only` error unless `is_admin`. Deleting a user keeps their memos (a deleted user becomes unregistered and is refused connection, so the leftover memos are operable only by admin).
+Deleting a user **cascades**: their memos, categories, and embedding cache rows are removed in one transaction (`repository.user.delete_user_db`), so no orphan data is left behind. See [user.md](user.md).
 
-`init_db()` migrates a legacy DB lacking the `user` column via `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` (old memos become `user=''`: inaccessible to regular users but operable by admin).
+`init_db()` migrates a legacy DB lacking the `user` column via `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''`. Any pre-existing `user=''` rows (orphans from such a migration) are no longer special-cased — with cross-user access removed, they are simply inaccessible.
 
 ## Search
 
@@ -18,7 +18,7 @@ The `search_memos` tool splits `query` on commas, drops empty/duplicate entries,
 
 ## Semantic Search
 
-`semantic_search_memos(query, limit=5)` is a separate tool that searches by **semantic closeness of the summary**. `service.semantic_search` computes the cosine similarity between the query embedding and each memo summary's embedding, attaches `similarity` (0–1), and returns up to `limit` results in descending order. Empty summaries are excluded. User isolation and admin cross-user reuse candidate fetching via `list_memos_db(..., is_admin=...)`, matching existing behavior.
+`semantic_search_memos(query, limit=5)` is a separate tool that searches by **semantic closeness of the summary**. `service.semantic_search` computes the cosine similarity between the query embedding and each memo summary's embedding, attaches `similarity` (0–1), and returns up to `limit` results in descending order. Empty summaries are excluded. User isolation reuses candidate fetching via `list_memos_db(user, ...)` (always the connected user's memos only).
 
 Embeddings use the OpenAI API (`text-embedding-3-small`, multilingual) and require `OPENAI_API_KEY` (overridable via `MEMO_EMBEDDING_MODEL`). A missing key or API failure becomes `EmbeddingError`, which the tool returns as an `Error: ...` string (other tools are unaffected).
 

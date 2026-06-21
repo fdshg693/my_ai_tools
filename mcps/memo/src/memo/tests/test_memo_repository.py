@@ -1,7 +1,12 @@
-"""repository.memo の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離 + admin 特権)。"""
+"""repository.memo の単体テスト (CRUD + タイトル部分一致検索 + ユーザー分離)。
 
-from memo.infra.database import ADMIN_USER, OTHERS_CATEGORY
-from memo.repository.category import list_categories_db, normalize_category
+カテゴリ自体の CRUD と列挙は ``test_category_repository.py`` に分離した。
+ここではメモ行に対する category の正規化・絞り込みの挙動のみを確認する。
+admin はもはやメモを横断操作できない (完全ユーザー分離) ので、admin 特権の
+テストは持たない。
+"""
+
+from memo.infra.database import OTHERS_CATEGORY
 from memo.repository.memo import (
     count_memos_db,
     create_memo_db,
@@ -72,13 +77,6 @@ def test_count_only_own_memos():
     create_memo_db(BOB, "bob-1")
     assert count_memos_db(ALICE) == 2
     assert count_memos_db(BOB) == 1
-
-
-def test_count_admin_counts_all():
-    create_memo_db(ALICE, "alice-1")
-    create_memo_db(BOB, "bob-1")
-    create_memo_db("", "orphan-1")
-    assert count_memos_db(ADMIN_USER, is_admin=True) == 3
 
 
 def test_search_partial_title_match():
@@ -228,66 +226,10 @@ def test_delete_other_users_memo_returns_false():
 
 
 # ---------------------------------------------------------------------------
-# admin 特権: is_admin=True で全ユーザー (user='' の孤立メモ含む) を操作できる
-# ---------------------------------------------------------------------------
-
-
-def test_admin_get_any_users_memo():
-    memo = create_memo_db(ALICE, "alice の秘密", "")
-    # admin は所有者を問わず取得できる
-    fetched = get_memo_db(ADMIN_USER, memo["id"], is_admin=True)
-    assert fetched is not None
-    assert fetched["user"] == ALICE
-
-
-def test_admin_get_orphan_memo():
-    # user='' の孤立メモ (旧 DB からの移行など) も admin は取得できる
-    orphan = create_memo_db("", "孤立メモ", "")
-    assert get_memo_db(ADMIN_USER, orphan["id"], is_admin=True) is not None
-    # 通常ユーザーからは見えない
-    assert get_memo_db(ALICE, orphan["id"]) is None
-
-
-def test_admin_list_all_users_memos():
-    create_memo_db(ALICE, "alice-1")
-    create_memo_db(BOB, "bob-1")
-    create_memo_db("", "orphan-1")
-    titles = {m["title"] for m in list_memos_db(ADMIN_USER, is_admin=True)}
-    assert titles == {"alice-1", "bob-1", "orphan-1"}
-
-
-def test_admin_search_all_users_memos():
-    create_memo_db(ALICE, "共有メモ", "")
-    create_memo_db(BOB, "共有メモ", "")
-    results = search_memos_db(ADMIN_USER, ["共有"], is_admin=True)
-    assert {m["user"] for m in results} == {ALICE, BOB}
-
-
-def test_admin_update_any_users_memo():
-    memo = create_memo_db(ALICE, "alice のメモ", "元")
-    updated = update_memo_db(ADMIN_USER, memo["id"], title="admin が更新", is_admin=True)
-    assert updated["title"] == "admin が更新"
-    # 所有者は変わらない
-    assert updated["user"] == ALICE
-
-
-def test_admin_delete_any_users_memo():
-    memo = create_memo_db(ALICE, "alice のメモ", "")
-    assert delete_memo_db(ADMIN_USER, memo["id"], is_admin=True) is True
-    assert get_memo_db(ALICE, memo["id"]) is None
-
-
-# ---------------------------------------------------------------------------
 # カテゴリ: 未指定は OTHERS・大文字正規化・同一カテゴリでの絞り込み
+# (カテゴリ列の正規化/絞り込みは repository.memo が permissive に行う。
+#  カテゴリ自体の存在検証は service 層、CRUD/列挙は test_category_repository.py)
 # ---------------------------------------------------------------------------
-
-
-def test_normalize_category_rules():
-    assert normalize_category(None) == OTHERS_CATEGORY
-    assert normalize_category("") == OTHERS_CATEGORY
-    assert normalize_category("   ") == OTHERS_CATEGORY
-    assert normalize_category("  work ") == "WORK"
-    assert normalize_category("Work") == "WORK"
 
 
 def test_create_defaults_to_others():
@@ -354,29 +296,8 @@ def test_update_empty_category_resets_to_others():
     assert updated["category"] == OTHERS_CATEGORY
 
 
-def test_admin_search_filters_by_category():
-    create_memo_db(ALICE, "共有メモ", "", category="work")
-    create_memo_db(BOB, "共有メモ", "", category="private")
-    results = search_memos_db(ADMIN_USER, ["共有"], is_admin=True, category="work")
-    assert {m["user"] for m in results} == {ALICE}
-
-
-def test_list_categories_distinct_sorted_per_user():
-    create_memo_db(ALICE, "a1", "", category="work")
-    create_memo_db(ALICE, "a2", "", category="WORK")  # 重複は1つに
-    create_memo_db(ALICE, "a3", "", category="private")
-    create_memo_db(ALICE, "a4")  # OTHERS
-    create_memo_db(BOB, "b1", "", category="finance")  # 他人のは出ない
-
-    assert list_categories_db(ALICE) == ["OTHERS", "PRIVATE", "WORK"]  # 名前順
-    assert list_categories_db(BOB) == ["FINANCE"]
-
-
-def test_list_categories_empty_when_no_memos():
-    assert list_categories_db(ALICE) == []
-
-
-def test_list_categories_admin_spans_all_users():
-    create_memo_db(ALICE, "a1", "", category="work")
-    create_memo_db(BOB, "b1", "", category="finance")
-    assert list_categories_db(ADMIN_USER, is_admin=True) == ["FINANCE", "WORK"]
+def test_update_other_users_memo_category_isolated():
+    # 他ユーザーのメモはカテゴリ更新でも触れない (完全分離)
+    memo = create_memo_db(ALICE, "alice のメモ", "", category="work")
+    assert update_memo_db(BOB, memo["id"], category="private") is None
+    assert get_memo_db(ALICE, memo["id"])["category"] == "WORK"

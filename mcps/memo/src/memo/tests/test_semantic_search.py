@@ -7,7 +7,6 @@ OPENAI_API_KEY も不要でテストできる。
 
 import pytest
 
-from memo.infra.database import ADMIN_USER
 from memo.service import memo as service
 from memo.repository.memo import create_memo_db, update_memo_db
 
@@ -83,12 +82,6 @@ def test_summary_change_triggers_one_recompute(fake_embed):
 def test_user_isolation(fake_embed):
     create_memo_db(ALICE, "alice のメモ", "犬と猫のペット")
     create_memo_db(BOB, "bob のメモ", "犬と猫のペット")
+    # admin も含め他人のメモは検索対象に入らない (完全分離)
     results = service.semantic_search(ALICE, "ペットについて")
     assert {m["user"] for m in results} == {ALICE}
-
-
-def test_admin_sees_all_users(fake_embed):
-    create_memo_db(ALICE, "alice のメモ", "犬と猫のペット")
-    create_memo_db(BOB, "bob のメモ", "犬と猫のペット")
-    results = service.semantic_search(ADMIN_USER, "ペットについて", is_admin=True)
-    assert {m["user"] for m in results} == {ALICE, BOB}

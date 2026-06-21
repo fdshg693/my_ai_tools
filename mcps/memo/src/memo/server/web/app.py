@@ -23,8 +23,19 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from memo.service.category import (
+    CategoryAlreadyExists,
+    CategoryNameRequired,
+    CategoryNotFound,
+    CannotModifyOthers,
+    create_category as create_category_service,
+    delete_category_by_id as delete_category_by_id_service,
+    list_categories as list_categories_service,
+    rename_category_by_id as rename_category_by_id_service,
+)
 from memo.service.memo import (
     TitleRequired,
+    UnknownCategory,
     count_memos as count_memos_service,
     create_memo as create_memo_service,
     delete_memo as delete_memo_service,
@@ -146,6 +157,10 @@ async def api_create_user_memo(request: Request) -> JSONResponse:
         memo = create_memo_service(name, title, summary, category)
     except TitleRequired:
         return JSONResponse({"error": "title is required"}, status_code=400)
+    except UnknownCategory as e:
+        return JSONResponse(
+            {"error": f"category '{e.category}' is not registered"}, status_code=400
+        )
     return JSONResponse(memo, status_code=201)
 
 
@@ -172,6 +187,10 @@ async def api_update_user_memo(request: Request) -> JSONResponse:
         memo = update_memo_service(name, memo_id, title, summary, category=category)
     except TitleRequired:
         return JSONResponse({"error": "title is required"}, status_code=400)
+    except UnknownCategory as e:
+        return JSONResponse(
+            {"error": f"category '{e.category}' is not registered"}, status_code=400
+        )
     if memo is None:
         return JSONResponse(
             {"error": f"memo id={memo_id} not found"}, status_code=404
@@ -188,6 +207,80 @@ async def api_delete_user_memo(request: Request) -> JSONResponse:
             {"error": f"memo id={memo_id} not found"}, status_code=404
         )
     return JSONResponse({"deleted": memo_id})
+
+
+async def api_list_user_categories(request: Request) -> JSONResponse:
+    """指定ユーザーのカテゴリ一覧を名前順に返す (メモ編集の選択肢・管理用)。
+
+    ユーザーが台帳に存在しなければ 404。
+    """
+    name = request.path_params["name"]
+    try:
+        get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
+    return JSONResponse(list_categories_service(name))
+
+
+async def api_create_user_category(request: Request) -> JSONResponse:
+    """指定ユーザーのカテゴリを新規作成する。name 必須 (400)・重複 (409)。"""
+    name = request.path_params["name"]
+    try:
+        get_user(name)  # 存在確認 (無ければ 404)
+    except UserNotFound:
+        return JSONResponse({"error": f"user '{name}' not found"}, status_code=404)
+
+    body = await request.json()
+    try:
+        created = create_category_service(name, str(body.get("name", "")))
+    except CategoryNameRequired:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    except CategoryAlreadyExists as e:
+        return JSONResponse(
+            {"error": f"category '{e.name}' already exists"}, status_code=409
+        )
+    return JSONResponse(created, status_code=201)
+
+
+async def api_rename_user_category(request: Request) -> JSONResponse:
+    """指定ユーザーのカテゴリをリネームする (紐づくメモのカテゴリも追従)。
+
+    OTHERS は変更不可 (403)・対象なし (404)・新名称が空 (400)・既存と衝突 (409)。
+    """
+    name = request.path_params["name"]
+    category_id = request.path_params["category_id"]
+    body = await request.json()
+    try:
+        renamed = rename_category_by_id_service(
+            name, category_id, str(body.get("name", ""))
+        )
+    except CategoryNameRequired:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    except CannotModifyOthers as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except CategoryNotFound as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except CategoryAlreadyExists as e:
+        return JSONResponse(
+            {"error": f"category '{e.name}' already exists"}, status_code=409
+        )
+    return JSONResponse(renamed)
+
+
+async def api_delete_user_category(request: Request) -> JSONResponse:
+    """指定ユーザーのカテゴリを削除する (紐づくメモは OTHERS へ付け替え)。
+
+    OTHERS は削除不可 (403)・対象なし (404)。
+    """
+    name = request.path_params["name"]
+    category_id = request.path_params["category_id"]
+    try:
+        delete_category_by_id_service(name, category_id)
+    except CannotModifyOthers as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except CategoryNotFound as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    return JSONResponse({"deleted": category_id})
 
 
 async def api_create_user(request: Request) -> JSONResponse:
@@ -263,6 +356,26 @@ def create_app() -> Starlette:
             Route(
                 "/api/users/{name}/memos/{memo_id:int}",
                 api_delete_user_memo,
+                methods=["DELETE"],
+            ),
+            Route(
+                "/api/users/{name}/categories",
+                api_list_user_categories,
+                methods=["GET"],
+            ),
+            Route(
+                "/api/users/{name}/categories",
+                api_create_user_category,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/users/{name}/categories/{category_id:int}",
+                api_rename_user_category,
+                methods=["PUT"],
+            ),
+            Route(
+                "/api/users/{name}/categories/{category_id:int}",
+                api_delete_user_category,
                 methods=["DELETE"],
             ),
             Route("/api/users/{name}", api_get_user, methods=["GET"]),

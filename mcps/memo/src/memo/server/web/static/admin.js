@@ -122,6 +122,31 @@ const memoFilterCategoryEl = document.getElementById("memo-filter-category");
 // 現在表示中のメモ一覧の状態 (どのユーザーの何ページ目か・カテゴリ絞り込み)。
 const memoView = { user: null, page: 1, totalPages: 0, category: "" };
 
+// 現在開いているユーザーのカテゴリ名一覧 (select の選択肢に使う)。
+let memoCategories = [];
+
+// 指定ユーザーのカテゴリ名一覧を取得して memoCategories に保持する。
+async function loadCategories(name) {
+  const cats = await api(`/api/users/${encodeURIComponent(name)}/categories`);
+  memoCategories = cats.map((c) => c.name);
+  return memoCategories;
+}
+
+// select 要素にカテゴリ選択肢を流し込む。
+// includeAll=true なら先頭に「(全カテゴリ)」(value="") を足す。
+// selected を含まない名前なら防御的に末尾へ追加して選択状態にする。
+function fillCategoryOptions(selectEl, { includeAll = false, selected = "" } = {}) {
+  const names = [...memoCategories];
+  if (selected && !names.includes(selected)) names.push(selected);
+  const opts = [];
+  if (includeAll) opts.push('<option value="">(全カテゴリ)</option>');
+  for (const n of names) {
+    const sel = n === selected ? " selected" : "";
+    opts.push(`<option value="${escapeHtml(n)}"${sel}>${escapeHtml(n)}</option>`);
+  }
+  selectEl.innerHTML = opts.join("");
+}
+
 function renderMemoRow(memo, user) {
   const tr = document.createElement("tr");
   tr.dataset.id = memo.id;
@@ -186,9 +211,15 @@ async function loadMemos(name, page, category = memoView.category) {
   }
 }
 
-function openMemos(name) {
-  // ユーザーを開き直すときはカテゴリ絞り込みをリセットする。
-  memoFilterCategoryEl.value = "";
+async function openMemos(name) {
+  // ユーザーを開き直すときはカテゴリを読み直し、絞り込みをリセットする。
+  try {
+    await loadCategories(name);
+  } catch (e) {
+    showToast(e.message, true);
+    return;
+  }
+  fillCategoryOptions(memoFilterCategoryEl, { includeAll: true, selected: "" });
   loadMemos(name, 1, "");
 }
 
@@ -199,21 +230,10 @@ memoNextBtn.addEventListener("click", () => {
   if (memoView.page < memoView.totalPages) loadMemos(memoView.user, memoView.page + 1);
 });
 
-// カテゴリ絞り込み: 入力値で 1 ページ目から取り直す。空ならクリア (全カテゴリ)。
-function applyMemoFilter() {
+// カテゴリ絞り込み: select の選択で 1 ページ目から取り直す (空 = 全カテゴリ)。
+memoFilterCategoryEl.addEventListener("change", () => {
   if (!memoView.user) return;
-  loadMemos(memoView.user, 1, memoFilterCategoryEl.value.trim());
-}
-memoFilterCategoryEl.addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") {
-    ev.preventDefault();
-    applyMemoFilter();
-  }
-});
-document.getElementById("memo-filter-apply").addEventListener("click", applyMemoFilter);
-document.getElementById("memo-filter-clear").addEventListener("click", () => {
-  memoFilterCategoryEl.value = "";
-  applyMemoFilter();
+  loadMemos(memoView.user, 1, memoFilterCategoryEl.value);
 });
 document.getElementById("memo-close").addEventListener("click", () => {
   memoCard.hidden = true;
@@ -240,7 +260,8 @@ function openMemoEditor(user, memo = null) {
     ? `「${user}」のメモを編集 (#${memo.id})`
     : `「${user}」に新しいメモを追加`;
   editTitleEl.value = memo ? memo.title : "";
-  editCategoryEl.value = memo ? memo.category : "";
+  // カテゴリは登録済みから選ぶ。新規は OTHERS を既定選択。
+  fillCategoryOptions(editCategoryEl, { selected: memo ? memo.category : "OTHERS" });
   editSummaryEl.value = memo ? memo.summary : "";
 
   memoCard.hidden = true;
@@ -273,7 +294,7 @@ memoEditForm.addEventListener("submit", async (ev) => {
   if (!memoEdit.user) return;
   const title = editTitleEl.value.trim();
   const summary = editSummaryEl.value;
-  const category = editCategoryEl.value.trim(); // 空欄はサーバー側で OTHERS に正規化
+  const category = editCategoryEl.value; // 登録済みカテゴリから選択 (select)
   if (!title) {
     showToast("タイトルは必須です", true);
     return;
@@ -290,6 +311,134 @@ memoEditForm.addEventListener("submit", async (ev) => {
     showToast(isNew ? "メモを追加しました" : `メモ #${memoEdit.id} を更新しました`);
     // 新規は更新日時が最新 → 1ページ目の先頭。編集は元のページに戻る。
     closeMemoEditor(true, isNew ? 1 : memoView.page);
+  } catch (e) {
+    showToast(e.message, true);
+  }
+});
+
+// --- カテゴリ管理画面 (ユーザーごと) ----------------------------------------
+
+const OTHERS_CATEGORY = "OTHERS"; // 既定カテゴリ。リネーム/削除不可 (サーバーもガード)
+
+const categoryCard = document.getElementById("category-card");
+const categoryUserEl = document.getElementById("category-user");
+const categoryRowsEl = document.getElementById("category-rows");
+const categoryEmptyEl = document.getElementById("category-empty");
+const categoryCreateForm = document.getElementById("category-create-form");
+const newCategoryEl = document.getElementById("new-category");
+
+const categoryView = { user: null };
+
+function renderCategoryRow(cat, user) {
+  const tr = document.createElement("tr");
+  const isOthers = cat.name === OTHERS_CATEGORY;
+  tr.dataset.id = cat.id;
+  tr.innerHTML = `
+    <td>
+      ${
+        isOthers
+          ? `<span class="name">${escapeHtml(cat.name)}</span> <span class="badge">既定</span>`
+          : `<input class="edit-category-name" value="${escapeHtml(cat.name)}" />`
+      }
+    </td>
+    <td class="actions">
+      ${
+        isOthers
+          ? ""
+          : '<button type="button" class="link save-btn">保存</button>' +
+            '<button type="button" class="link danger delete-btn">削除</button>'
+      }
+    </td>
+  `;
+
+  const saveBtn = tr.querySelector(".save-btn");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const name = tr.querySelector(".edit-category-name").value.trim();
+      if (!name) {
+        showToast("カテゴリ名は必須です", true);
+        return;
+      }
+      try {
+        await api(`/api/users/${encodeURIComponent(user)}/categories/${cat.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ name }),
+        });
+        showToast(`カテゴリを「${name}」に変更しました (メモも追従)`);
+        loadCategoryRows(user);
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    });
+  }
+
+  const deleteBtn = tr.querySelector(".delete-btn");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`カテゴリ「${cat.name}」を削除しますか？\n(紐づくメモは ${OTHERS_CATEGORY} に移ります)`))
+        return;
+      try {
+        await api(`/api/users/${encodeURIComponent(user)}/categories/${cat.id}`, {
+          method: "DELETE",
+        });
+        showToast(`カテゴリ「${cat.name}」を削除しました`);
+        loadCategoryRows(user);
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    });
+  }
+
+  return tr;
+}
+
+async function loadCategoryRows(user) {
+  try {
+    const cats = await api(`/api/users/${encodeURIComponent(user)}/categories`);
+    categoryRowsEl.replaceChildren(...cats.map((c) => renderCategoryRow(c, user)));
+    categoryEmptyEl.hidden = cats.length > 0;
+  } catch (e) {
+    showToast(e.message, true);
+  }
+}
+
+function openCategories(user) {
+  categoryView.user = user;
+  categoryUserEl.textContent = user;
+  memoCard.hidden = true;
+  memoEditCard.hidden = true;
+  categoryCard.hidden = false;
+  categoryCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  loadCategoryRows(user);
+}
+
+document.getElementById("memo-categories").addEventListener("click", () => {
+  if (memoView.user) openCategories(memoView.user);
+});
+
+// カテゴリ管理を閉じてメモ一覧へ戻る。カテゴリ変更を反映するため取り直す。
+document.getElementById("category-back").addEventListener("click", () => {
+  categoryCard.hidden = true;
+  if (categoryView.user) openMemos(categoryView.user);
+  categoryView.user = null;
+});
+
+categoryCreateForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!categoryView.user) return;
+  const name = newCategoryEl.value.trim();
+  if (!name) {
+    showToast("カテゴリ名は必須です", true);
+    return;
+  }
+  try {
+    await api(`/api/users/${encodeURIComponent(categoryView.user)}/categories`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    showToast(`カテゴリ「${name}」を追加しました`);
+    newCategoryEl.value = "";
+    loadCategoryRows(categoryView.user);
   } catch (e) {
     showToast(e.message, true);
   }

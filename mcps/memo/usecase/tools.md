@@ -5,7 +5,9 @@
 | ツール | 用途 | 主な引数 |
 |--------|------|----------|
 | `switch_user` | 現在の接続ユーザーを切り替える (= ログイン)。結果に切替先のカテゴリ一覧を含む | `target` (登録済みユーザー名) |
-| `create_memo` | メモを新規作成する | `title` (必須), `summary` (任意), `category` (任意・空欄は `OTHERS`) |
+| `create_category` | 自分のカテゴリを新規登録する (メモ付与の前に必要) | `name` (必須) |
+| `list_categories` | 自分のカテゴリ一覧を取得する | (なし) |
+| `create_memo` | メモを新規作成する | `title` (必須), `summary` (任意), `category` (任意・空欄は `OTHERS`・**登録済みのみ**) |
 | `get_memo` | ID 指定で 1 件取得する | `memo_id` |
 | `list_memos` | 新しい順に一覧する | `limit` (既定 50), `category` (任意・絞り込み) |
 | `search_memos` | **タイトルの部分一致**で検索する (キーワード型) | `query` (カンマ区切りで OR 検索), `limit`, `category` (任意・絞り込み) |

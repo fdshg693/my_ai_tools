@@ -1,13 +1,12 @@
 """メモ (``memos`` テーブル) のデータアクセス。
 
-すべてのメモは作成したユーザー名 (``user``) を持ち、CRUD・検索は原則
+すべてのメモは作成したユーザー名 (``user``) を持ち、CRUD・検索は常に
 ``user`` で絞り込む。これにより、あるユーザーのメモは他ユーザーからは
-読み取りも含めて一切アクセスできない (完全分離)。ただし ``is_admin=True``
-を渡すと user 絞り込みを外し、全ユーザー (``user=''`` の孤立メモ含む) の
-メモを操作対象にする (admin 特権)。
+読み取りも含めて一切アクセスできない (完全分離)。admin も例外ではなく、
+他人のメモは操作できない (admin はユーザー台帳を管理できるだけの通常ユーザー)。
 
-ここでは「誰が admin か」は判定しない。呼び出し元 (tools / authz) が解決した
-``is_admin`` を受け取るだけの純粋なデータアクセス層。
+ここでは認可も特権判定も行わない。呼び出し元 (tools / authz) が解決した
+接続ユーザー ``user`` を受け取るだけの純粋なデータアクセス層。
 """
 
 import sqlite3
@@ -28,15 +27,12 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
-def _scope(memo_id: int, user: str, is_admin: bool) -> tuple[str, list]:
-    """ID で1件のメモを指す WHERE 句片とパラメータを返す。
+def _scope(memo_id: int, user: str) -> tuple[str, list]:
+    """ID と所有者でメモ1件を指す WHERE 句片とパラメータを返す。
 
-    通常は所有者 (``user``) でも絞り、他人のメモは対象外になる。
-    ``is_admin=True`` は所有者を問わず ID だけで対象を指す (admin 特権)。
-    get/update/delete はこのヘルパーで `is_admin` 分岐を1か所に集約する。
+    常に所有者 (``user``) でも絞るので、他人のメモは対象外になる。
+    get/update/delete はこのヘルパーで対象の指定を1か所に集約する。
     """
-    if is_admin:
-        return "id = ?", [memo_id]
     return "id = ? AND user = ?", [memo_id, user]
 
 
@@ -46,6 +42,7 @@ def create_memo_db(
     """メモを新規作成し、作成したレコードを返す。所有者は ``user``。
 
     ``category`` は ``normalize_category`` で正規化する (未指定は ``OTHERS``)。
+    カテゴリが登録済みかの検証は service 層が行う (ここは permissive)。
     """
     with _connect_db() as db:
         cursor = db.execute(
@@ -57,31 +54,22 @@ def create_memo_db(
     return _row_to_dict(row)
 
 
-def get_memo_db(user: str, memo_id: int, is_admin: bool = False) -> dict | None:
-    """ID でメモを1件取得する。
-
-    通常は ``user`` が所有しない/存在しなければ None。``is_admin=True`` なら
-    所有者を問わず ID だけで取得する。
-    """
-    where, params = _scope(memo_id, user, is_admin)
+def get_memo_db(user: str, memo_id: int) -> dict | None:
+    """ID でメモを1件取得する (``user`` が所有しない/存在しなければ None)。"""
+    where, params = _scope(memo_id, user)
     with _connect_db() as db:
         row = db.execute(f"SELECT * FROM memos WHERE {where}", params).fetchone()
     return _row_to_dict(row) if row else None
 
 
-def _base_filter(
-    user: str, is_admin: bool, category: str | None
-) -> tuple[list[str], list]:
+def _base_filter(user: str, category: str | None) -> tuple[list[str], list]:
     """user / category の絞り込み条件 (WHERE 句片の一覧とパラメータ) を組み立てる。
 
-    通常は ``user`` で絞り、``is_admin=True`` なら所有者の絞り込みを外す。
-    ``category`` を渡すとさらに正規化したカテゴリ一致で絞る (``None`` は全カテゴリ)。
+    常に ``user`` で絞る。``category`` を渡すとさらに正規化したカテゴリ一致で
+    絞る (``None`` は全カテゴリ)。
     """
-    clauses: list[str] = []
-    params: list = []
-    if not is_admin:
-        clauses.append("user = ?")
-        params.append(user)
+    clauses: list[str] = ["user = ?"]
+    params: list = [user]
     if category is not None:
         clauses.append("category = ?")
         params.append(normalize_category(category))
@@ -91,40 +79,37 @@ def _base_filter(
 def list_memos_db(
     user: str,
     limit: int = 50,
-    is_admin: bool = False,
     offset: int = 0,
     category: str | None = None,
 ) -> list[dict]:
-    """メモを新しい順 (更新日時の降順) に取得する。
+    """メモを新しい順 (更新日時の降順) に取得する (``user`` のメモのみ)。
 
-    通常は ``user`` のメモのみ。``is_admin=True`` なら全ユーザーのメモを返す。
     ``category`` を渡すと同一カテゴリのメモだけに絞る (``None`` は全カテゴリ)。
     ``offset`` で先頭から読み飛ばす件数を指定でき、``limit`` と組み合わせて
     ページングに使える。
     """
-    clauses, params = _base_filter(user, is_admin, category)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    clauses, params = _base_filter(user, category)
+    where = " AND ".join(clauses)
     with _connect_db() as db:
         rows = db.execute(
-            f"SELECT * FROM memos {where} "
+            f"SELECT * FROM memos WHERE {where} "
             "ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
-def count_memos_db(
-    user: str, is_admin: bool = False, category: str | None = None
-) -> int:
-    """メモの総件数を返す (ページング用)。
+def count_memos_db(user: str, category: str | None = None) -> int:
+    """メモの総件数を返す (``user`` のメモのみ。ページング用)。
 
-    通常は ``user`` のメモのみ数える。``is_admin=True`` なら全ユーザー分。
     ``category`` を渡すと同一カテゴリだけを数える (``None`` は全カテゴリ)。
     """
-    clauses, params = _base_filter(user, is_admin, category)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    clauses, params = _base_filter(user, category)
+    where = " AND ".join(clauses)
     with _connect_db() as db:
-        row = db.execute(f"SELECT COUNT(*) AS n FROM memos {where}", params).fetchone()
+        row = db.execute(
+            f"SELECT COUNT(*) AS n FROM memos WHERE {where}", params
+        ).fetchone()
     return row["n"]
 
 
@@ -137,22 +122,20 @@ def search_memos_db(
     user: str,
     keywords: list[str],
     limit: int = 50,
-    is_admin: bool = False,
     category: str | None = None,
 ) -> list[dict]:
     """メモをタイトルの部分一致で検索する (大文字小文字を区別しない)。
 
-    通常は ``user`` のメモのみ、``is_admin=True`` なら全ユーザーのメモが対象。
-    ``category`` を渡すと同一カテゴリのメモだけに絞る (``None`` は全カテゴリ)。
-    複数キーワードはいずれかに一致したメモを返す (OR 検索)。各メモには
-    どのキーワードに一致したかを示す ``matched_keywords`` を付与する。
+    ``user`` のメモのみが対象。``category`` を渡すと同一カテゴリのメモだけに
+    絞る (``None`` は全カテゴリ)。複数キーワードはいずれかに一致したメモを返す
+    (OR 検索)。各メモには ``matched_keywords`` を付与する。
 
     LIKE のワイルドカード (``%`` ``_``) はリテラルとして扱うため ESCAPE でエスケープする。
     """
     if not keywords:
         return []
     title_clause = " OR ".join("title LIKE ? ESCAPE '\\'" for _ in keywords)
-    clauses, params = _base_filter(user, is_admin, category)
+    clauses, params = _base_filter(user, category)
     clauses.append(f"({title_clause})")
     where = " AND ".join(clauses)
     params.extend(f"%{_escape_like(k)}%" for k in keywords)
@@ -179,17 +162,16 @@ def update_memo_db(
     memo_id: int,
     title: str | None = None,
     summary: str | None = None,
-    is_admin: bool = False,
     category: str | None = None,
 ) -> dict | None:
     """メモを更新する。指定したフィールドのみ変更し、更新後のレコードを返す。
 
-    通常は ``user`` が所有するメモのみ更新でき、対象が存在しない/他人のものなら
-    None。``is_admin=True`` なら所有者を問わず ID で更新する。
+    ``user`` が所有するメモのみ更新でき、対象が存在しない/他人のものなら None。
     title / summary / category がすべて None の場合は更新せず既存レコードを返す。
-    ``category`` を渡すと ``normalize_category`` で正規化して設定する。
+    ``category`` を渡すと ``normalize_category`` で正規化して設定する
+    (登録済みかの検証は service 層が行う)。
     """
-    where, scope_params = _scope(memo_id, user, is_admin)
+    where, scope_params = _scope(memo_id, user)
     with _connect_db() as db:
         row = db.execute(f"SELECT * FROM memos WHERE {where}", scope_params).fetchone()
         if row is None:
@@ -219,12 +201,12 @@ def update_memo_db(
     return _row_to_dict(row)
 
 
-def delete_memo_db(user: str, memo_id: int, is_admin: bool = False) -> bool:
+def delete_memo_db(user: str, memo_id: int) -> bool:
     """メモを削除する。削除できたら True、対象が無ければ False。
 
-    通常は ``user`` が所有するメモのみ。``is_admin=True`` なら所有者を問わない。
+    ``user`` が所有するメモのみ削除できる (他人のメモは対象外)。
     """
-    where, params = _scope(memo_id, user, is_admin)
+    where, params = _scope(memo_id, user)
     with _connect_db() as db:
         cursor = db.execute(f"DELETE FROM memos WHERE {where}", params)
         deleted = cursor.rowcount > 0

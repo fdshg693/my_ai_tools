@@ -28,10 +28,11 @@ _db_mod.init_db()
 def clean_tables():
     """各テストの前にテーブルを空にし、auth のプロセス状態を既定に戻す。
 
-    ``users`` も空にするが、特権ユーザー ``admin`` は init_db と同じく必ず
-    シードし直す (ブートストラップを保つ)。auth はプロセスグローバルな状態
-    (トランスポート種別 / stdio ユーザー / client_id マップ) を持つので、
-    テスト間でリークしないよう既定 (stdio・未設定) に戻す。
+    ``users`` / ``categories`` も空にするが、ユーザー管理用 ``admin`` は init_db と
+    同じく必ずシードし直す (ブートストラップを保つ)。admin には既定カテゴリ
+    ``OTHERS`` も再シードする (init_db のシードと揃える)。auth はプロセス
+    グローバルな状態 (トランスポート種別 / stdio ユーザー / client_id マップ) を
+    持つので、テスト間でリークしないよう既定 (stdio・未設定) に戻す。
     """
     _auth_mod.set_http_transport(False)
     _auth_mod.set_stdio_user(None)
@@ -39,9 +40,14 @@ def clean_tables():
     with _db_mod._connect_db() as db:
         db.execute("DELETE FROM memos")
         db.execute("DELETE FROM memo_embeddings")
+        db.execute("DELETE FROM categories")
         db.execute("DELETE FROM users")
         db.execute(
             "INSERT OR IGNORE INTO users (name, display_name) VALUES (?, ?)",
             (_db_mod.ADMIN_USER, "Administrator"),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO categories (user, name) VALUES (?, ?)",
+            (_db_mod.ADMIN_USER, _db_mod.OTHERS_CATEGORY),
         )
     yield

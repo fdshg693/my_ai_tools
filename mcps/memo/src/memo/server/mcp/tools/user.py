@@ -13,7 +13,6 @@ import json
 
 from fastmcp import Context
 
-from memo.infra.database import ADMIN_USER
 from memo.repository.user import is_registered_user
 from memo.service.category import list_categories
 from memo.server.mcp.admin_tools import ADMIN_TOOL_TAG, apply_session_visibility
@@ -168,8 +167,8 @@ def delete_user(name: str) -> str:
         "stdio では以後この接続のメモ操作が target のものになる (サーバー再起動は不要)。\n"
         "HTTP では接続時にクエリ ?client_id= を指定している必要がある (指定が無いと\n"
         "切り替え状態を保持できない)。admin への切り替えも可能。\n"
-        "成功時は、切り替え先ユーザーのメモが持つカテゴリ一覧も併せて返す\n"
-        "(検索・一覧を category で絞り込む際の手掛かりになる)。\n"
+        "成功時は、切り替え先ユーザーが持つカテゴリ一覧も併せて返す\n"
+        "(メモ作成や、検索・一覧の category 絞り込みの手掛かりになる)。\n"
         "admin に切り替えると、この接続だけでユーザー管理ツールが有効化される\n"
         "(無効化されている場合あり。env MEMO_ADMIN_TOOLS_AUTO_ENABLE)。"
     )
@@ -191,12 +190,12 @@ async def switch_user(target: str, ctx: Context) -> str:
     if not is_registered_user(target):
         return f"Error: user '{target}' is not registered."
 
-    # 切り替え先がメモを持つカテゴリ一覧を添える。admin への切り替えは全メモが対象。
-    categories = list_categories(target, is_admin=target == ADMIN_USER)
+    # 切り替え先ユーザーが持つカテゴリ一覧を添える (カテゴリはユーザー単位)。
+    categories = [c["name"] for c in list_categories(target)]
     cat_note = (
-        "メモのカテゴリ: " + ", ".join(categories)
+        "カテゴリ: " + ", ".join(categories)
         if categories
-        else "(カテゴリを持つメモはまだありません)"
+        else "(カテゴリはまだありません)"
     )
 
     if not transport_is_http():

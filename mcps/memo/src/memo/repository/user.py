@@ -4,8 +4,11 @@
 接続を許可してよいかの判定 (``is_registered_user``) もここで提供する
 (認可ロジック自体は ``memo.authz`` がこれを使って組み立てる)。
 
-ユーザーを削除してもそのユーザーのメモ (``memos``) は残す。未登録になった
-ユーザーは接続を拒否されるため、残ったメモは admin だけが操作できる。
+ユーザーを削除すると、そのユーザーのメモ (``memos``)・カテゴリ
+(``categories``)・埋め込みキャッシュ (``memo_embeddings``) も一緒に
+カスケード削除する (孤立データを残さない)。これは複数テーブルにまたがる
+削除だが、原子性を優先して1接続のトランザクションで生 SQL を実行する
+(各 repository を経由すると接続が分かれ原子性が崩れるため、ここでまとめる)。
 """
 
 import sqlite3
@@ -96,9 +99,22 @@ def update_user_db(
 def delete_user_db(name: str) -> bool:
     """ユーザーを台帳から削除する。削除できたら True、対象が無ければ False。
 
-    そのユーザーのメモ (memos) は削除しない。
+    そのユーザーのメモ (memos)・カテゴリ (categories)・埋め込みキャッシュ
+    (memo_embeddings) も一緒に削除する (孤立データを残さない)。すべてを
+    1接続のトランザクションで実行し、整合を保つ。
     """
     with _connect_db() as db:
-        cursor = db.execute("DELETE FROM users WHERE name = ?", (name,))
-        deleted = cursor.rowcount > 0
-    return deleted
+        exists = db.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone()
+        if exists is None:
+            return False
+        # メモに紐づく埋め込みキャッシュ → メモ → カテゴリ → ユーザーの順に削除
+        db.execute(
+            "DELETE FROM memo_embeddings WHERE memo_id IN "
+            "(SELECT id FROM memos WHERE user = ?)",
+            (name,),
+        )
+        db.execute("DELETE FROM memos WHERE user = ?", (name,))
+        db.execute("DELETE FROM categories WHERE user = ?", (name,))
+        db.execute("DELETE FROM users WHERE name = ?", (name,))
+        db.commit()
+    return True

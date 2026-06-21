@@ -28,7 +28,7 @@ uv run memo-admin
 # Emit the full session picture (Mcp-Session-Id etc.) at DEBUG level on stderr
 uv run memo --user alice --debug        # or env MEMO_LOG_DEBUG=1
 
-# Unit tests (DB CRUD / search / admin privilege / user ledger / switch / audit log)
+# Unit tests (DB CRUD / search / user isolation / categories / user ledger / switch / audit log)
 uv run --project mcps/memo pytest mcps/memo/src/memo/tests/ -v
 
 # Inspect the registered tools via an MCP client (in-process connection)

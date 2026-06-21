@@ -9,10 +9,10 @@ SQLite with WAL journaling (`memo.db`). `init_db()` creates the schema at server
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | INTEGER PK | Auto-increment |
-| `user` | TEXT NOT NULL | Owning user name. Indexed by `idx_memos_user` |
+| `user` | TEXT NOT NULL | Owning user name. Indexed by `idx_memos_user`. Memos are always scoped by this (no cross-user access, even for `admin`) |
 | `title` | TEXT NOT NULL | Title |
 | `summary` | TEXT NOT NULL DEFAULT '' | Summary |
-| `category` | TEXT NOT NULL DEFAULT 'OTHERS' | Category. Normalized (trim + uppercase) on write by `repository.category.normalize_category`; empty/unspecified → `OTHERS` (`OTHERS_CATEGORY`). See [features/category.md](features/category.md) |
+| `category` | TEXT NOT NULL DEFAULT 'OTHERS' | Category. Normalized (trim + uppercase) on write by `repository.category.normalize_category`; empty/unspecified → `OTHERS` (`OTHERS_CATEGORY`). Must be one of the owner's registered `categories` (validated in `service.memo`). See [features/category.md](features/category.md) |
 | `created_at` | TEXT NOT NULL | Created timestamp |
 | `updated_at` | TEXT NOT NULL | Updated timestamp (set to `datetime('now')` on update) |
 
@@ -25,6 +25,18 @@ SQLite with WAL journaling (`memo.db`). `init_db()` creates the schema at server
 | `note` | TEXT NOT NULL DEFAULT '' | Note / remarks (editable by admin) |
 | `created_at` | TEXT NOT NULL | Created timestamp |
 | `updated_at` | TEXT NOT NULL | Updated timestamp |
+
+**`categories` table** (per-user first-class category ledger):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Auto-increment |
+| `user` | TEXT NOT NULL | Owning user name. Indexed by `idx_categories_user` |
+| `name` | TEXT NOT NULL | Category name (normalized: trim + uppercase). `UNIQUE(user, name)` |
+| `created_at` | TEXT NOT NULL | Created timestamp |
+| `updated_at` | TEXT NOT NULL | Updated timestamp |
+
+Each user is seeded with `OTHERS` (cannot be renamed/deleted). A memo's `category` must match one of its owner's rows here (or `OTHERS`). Rename cascades to `memos.category`; delete reassigns linked memos to `OTHERS`. See [features/category.md](features/category.md).
 
 **`memo_embeddings` table** (embedding cache for semantic search):
 
@@ -40,6 +52,7 @@ SQLite with WAL journaling (`memo.db`). `init_db()` creates the schema at server
 
 Update the `CREATE TABLE` statements in `init_db()`. To add a column to an existing DB, follow the lightweight pattern used for the `user` column (`PRAGMA table_info` to check existence → `ALTER TABLE ADD COLUMN` if absent). If a full migration spanning multiple versions becomes necessary, refer to the `_MIGRATIONS` approach in `dynamic_prompt`.
 
-Existing lightweight migrations performed by `init_db()`:
-- `user` column: `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` (old memos become `user=''`: inaccessible to regular users but operable by admin).
+Existing lightweight migrations / seeds performed by `init_db()`:
+- `user` column: `ALTER TABLE ADD COLUMN user TEXT NOT NULL DEFAULT ''` (old memos become `user=''`; with cross-user access removed, such orphan rows are simply inaccessible).
 - `category` column: `ALTER TABLE memos ADD COLUMN category TEXT NOT NULL DEFAULT 'OTHERS'`, so all pre-existing memos become `OTHERS` in one step (same `PRAGMA table_info` pattern as the `user` column).
+- `categories` table seed/back-fill: `INSERT OR IGNORE` seeds `OTHERS` for every user in `users`, and back-fills every distinct `(user, category)` already present on `memos`, so existing memos remain linked to a registered category.

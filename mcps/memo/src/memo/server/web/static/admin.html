@@ -48,14 +48,13 @@
         <h2>「<span id="memo-user"></span>」のメモ一覧</h2>
         <div class="head-actions">
           <button id="memo-new" type="button" class="primary">新規メモ</button>
+          <button id="memo-categories" type="button" class="ghost">カテゴリ管理</button>
           <button id="memo-close" type="button" class="ghost">閉じる</button>
         </div>
       </div>
       <div class="memo-filter">
         <label for="memo-filter-category">カテゴリで絞り込み</label>
-        <input id="memo-filter-category" type="text" placeholder="(全カテゴリ)" autocomplete="off" />
-        <button id="memo-filter-apply" type="button" class="ghost">絞り込み</button>
-        <button id="memo-filter-clear" type="button" class="ghost">クリア</button>
+        <select id="memo-filter-category"></select>
       </div>
       <table id="memo-table">
         <thead>
@@ -89,8 +88,8 @@
           <input id="edit-memo-title" type="text" autocomplete="off" required />
         </label>
         <label class="field">
-          <span class="field-label">カテゴリ (任意・空欄は OTHERS)</span>
-          <input id="edit-memo-category" type="text" autocomplete="off" placeholder="OTHERS" />
+          <span class="field-label">カテゴリ (登録済みから選択)</span>
+          <select id="edit-memo-category"></select>
         </label>
         <label class="field">
           <span class="field-label">概要 (任意)</span>
@@ -101,6 +100,27 @@
           <button id="memo-edit-cancel" type="button" class="ghost">キャンセル</button>
         </div>
       </form>
+    </section>
+
+    <section id="category-card" class="card" hidden>
+      <div class="card-head">
+        <h2>「<span id="category-user"></span>」のカテゴリ管理</h2>
+        <button id="category-back" type="button" class="ghost">← メモ一覧へ戻る</button>
+      </div>
+      <form id="category-create-form" class="row">
+        <input id="new-category" type="text" placeholder="カテゴリ名 (必須)" autocomplete="off" required />
+        <button type="submit" class="primary">追加</button>
+      </form>
+      <table id="category-table">
+        <thead>
+          <tr>
+            <th>カテゴリ名</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody id="category-rows"></tbody>
+      </table>
+      <p id="category-empty" class="empty" hidden>カテゴリがありません。</p>
     </section>
   </div>
 

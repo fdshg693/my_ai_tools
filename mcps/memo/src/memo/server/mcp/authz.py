@@ -6,8 +6,9 @@
 
 - 識別できない (`--user` / `?user=` の指定が無い) → 拒否
 - 識別できても ``users`` 台帳に未登録 → 拒否
-- ``admin`` (``ADMIN_USER``) なら ``is_admin=True`` を返し、メモツールは全
-  ユーザーのメモを、ユーザー管理ツールは台帳の操作を許可する。
+- ``admin`` (``ADMIN_USER``) なら ``is_admin=True`` を返す。これは**ユーザー管理
+  ツールの admin-only 判定にのみ**使う。メモ・カテゴリツールは ``is_admin`` を
+  使わず常に接続ユーザー単位でスコープする (admin も他人のメモは操作できない)。
 """
 
 from memo.infra.database import ADMIN_USER

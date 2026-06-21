@@ -1,6 +1,11 @@
 """repository.user の単体テスト (ユーザー台帳の CRUD + 登録判定)。"""
 
 from memo.infra.database import ADMIN_USER
+from memo.repository.category import (
+    create_category_db,
+    list_categories_db,
+)
+from memo.repository.embedding import get_cached_embedding, upsert_embedding
 from memo.repository.memo import create_memo_db, get_memo_db
 from memo.repository.user import (
     create_user_db,
@@ -79,14 +84,29 @@ def test_update_missing_user_returns_none():
     assert update_user_db("nobody", display_name="x") is None
 
 
-def test_delete_user_keeps_memos():
+def test_delete_user_cascades_memos_categories_embeddings():
     create_user_db(ALICE)
-    memo = create_memo_db(ALICE, "alice のメモ", "")
+    create_category_db(ALICE, "work")
+    memo = create_memo_db(ALICE, "alice のメモ", "concept", category="work")
+    upsert_embedding(memo["id"], "hash", "model", [0.1, 0.2])
+
     assert delete_user_db(ALICE) is True
     assert is_registered_user(ALICE) is False
-    # メモは残り、admin だけが操作できる
-    assert get_memo_db(ADMIN_USER, memo["id"], is_admin=True) is not None
-    assert get_memo_db(ALICE, memo["id"]) is not None  # DB 層は user 一致なら取れる
+    # メモ・カテゴリ・埋め込みもカスケード削除される (孤立データを残さない)
+    assert get_memo_db(ALICE, memo["id"]) is None
+    assert list_categories_db(ALICE) == []
+    assert get_cached_embedding(memo["id"]) is None
+
+
+def test_delete_does_not_touch_other_users():
+    create_user_db(ALICE)
+    create_user_db(BOB)
+    create_category_db(BOB, "work")
+    bob_memo = create_memo_db(BOB, "bob のメモ", "", category="work")
+    delete_user_db(ALICE)
+    # bob のデータは無関係
+    assert get_memo_db(BOB, bob_memo["id"]) is not None
+    assert [c["name"] for c in list_categories_db(BOB)] == ["WORK"]
 
 
 def test_delete_missing_user_returns_false():
